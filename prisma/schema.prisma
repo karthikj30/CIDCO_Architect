@@ -1,0 +1,150 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ARCHITECT
+  CIDCO_OFFICER
+  ADMIN
+}
+
+enum ReportSource {
+  API
+  CSV
+  WEB
+}
+
+enum ReportStatus {
+  SUBMITTED
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+}
+
+enum AttachmentKind {
+  DOCUMENT
+  AQI_BOARD_PHOTO
+  CSV_SOURCE
+  OTHER
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         Role     @default(ARCHITECT)
+  // Architect-specific profile fields, optional for CIDCO officers.
+  firmName     String?
+  councilRegNo String?
+  phone        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  apiKeys ApiKey[]
+  reports Report[]
+
+  @@map("users")
+}
+
+model ApiKey {
+  id         String    @id @default(cuid())
+  userId     String
+  label      String
+  // Only the hash is stored; the plaintext key is shown once at creation.
+  keyHash    String    @unique
+  prefix     String
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("api_keys")
+}
+
+model Project {
+  id         String   @id @default(cuid())
+  name       String
+  code       String   @unique
+  node       String
+  plotNumber String?
+  createdAt  DateTime @default(now())
+
+  reports Report[]
+
+  @@map("projects")
+}
+
+model Report {
+  id            String       @id @default(cuid())
+  referenceNo   String       @unique
+  userId        String
+  projectId     String?
+  source        ReportSource
+  status        ReportStatus @default(SUBMITTED)
+
+  siteName      String
+  location      String
+  latitude      Float?
+  longitude     Float?
+  measuredAt    DateTime
+  aqiValue      Int
+  pm25          Float?
+  pm10          Float?
+  so2           Float?
+  no2           Float?
+  co            Float?
+  ozone         Float?
+  remarks       String?
+
+  reviewedBy    String?
+  reviewNote    String?
+  reviewedAt    DateTime?
+
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project     Project?     @relation(fields: [projectId], references: [id])
+  attachments Attachment[]
+
+  @@index([userId])
+  @@index([measuredAt])
+  @@index([status])
+  @@map("reports")
+}
+
+model Attachment {
+  id         String         @id @default(cuid())
+  reportId   String
+  kind       AttachmentKind
+  fileName   String
+  storedName String
+  mimeType   String
+  sizeBytes  Int
+  createdAt  DateTime       @default(now())
+
+  report Report @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@index([reportId])
+  @@map("attachments")
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  action    String
+  detail    String?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("audit_logs")
+}
