@@ -148,3 +148,20 @@ model AuditLog {
   @@index([userId])
   @@map("audit_logs")
 }
+
+model ApiRequestLog {
+  id           String   @id @default(cuid())
+  method       String
+  endpoint     String
+  statusCode   Int
+  durationMs   Int
+  ip           String?
+  userId       String?
+  requestBody  String?  @db.Text
+  responseBody String?  @db.Text
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
+  @@index([endpoint])
+  @@map("api_request_logs")
+}

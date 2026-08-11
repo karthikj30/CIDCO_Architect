@@ -11,6 +11,8 @@ import {
   assertFileAllowed,
 } from '@/lib/storage';
 
+import { withLogging } from '@/lib/logger';
+
 export const dynamic = 'force-dynamic';
 
 const DOCUMENT_FIELDS = ['document', 'documents', 'report', 'file'];
@@ -24,6 +26,7 @@ const PHOTO_FIELDS = ['boardPhoto', 'boardPhotos', 'aqiBoardPhoto', 'aqiBoardPho
  * the on-site AQI board) or a plain JSON body when there is nothing to attach.
  */
 export async function POST(req: NextRequest) {
+  return withLogging(req, async (req) => {
   try {
     const auth = await authenticate(req);
     if (!auth) return unauthorized();
@@ -107,10 +110,12 @@ export async function POST(req: NextRequest) {
     }
     return handleError(error);
   }
+  });
 }
 
 /** GET /api/reports — architects see their own; CIDCO officers see everything. */
 export async function GET(req: NextRequest) {
+  return withLogging(req, async (req) => {
   try {
     const auth = await authenticate(req);
     if (!auth) return unauthorized();
@@ -152,4 +157,5 @@ export async function GET(req: NextRequest) {
   } catch (error) {
     return handleError(error);
   }
+  });
 }
