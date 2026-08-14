@@ -39,6 +39,22 @@ const optionalText = z
     return s === '' ? null : s;
   });
 
+// "Other applicable environmental parameters" — a free-form bag accepted as an
+// object or a JSON string.
+const otherParamsSchema = z
+  .union([z.record(z.any()), z.string(), z.null(), z.undefined()])
+  .transform((v) => {
+    if (v === null || v === undefined || v === '') return null;
+    if (typeof v === 'string') {
+      try {
+        return JSON.parse(v) as Record<string, unknown>;
+      } catch {
+        return { note: v };
+      }
+    }
+    return v as Record<string, unknown>;
+  });
+
 export const reportSchema = z.object({
   siteName: z.string().min(2, 'Site name is required'),
   location: z.string().min(2, 'Location is required'),
@@ -57,9 +73,103 @@ export const reportSchema = z.object({
   ozone: optionalNumberish,
   remarks: optionalText,
   projectCode: optionalText,
+
+  // Station / device provenance for automated AQI monitoring feeds.
+  projectSiteId: optionalText,
+  monitoringStationId: optionalText,
+  oem: optionalText,
+  deviceModel: optionalText,
+  temperature: optionalNumberish,
+  humidity: optionalNumberish,
+  integrationMethod: optionalText,
+  otherParams: otherParamsSchema,
 });
 
 export type ReportInput = z.infer<typeof reportSchema>;
+
+// ---------------------------------------------------------------------------
+// Header/key aliasing — lets a device or an integrator send the human-readable
+// parameter names (e.g. "PM2.5", "O₃", "Station/Device ID", "Data Source /
+// Integration Method") and still land on the canonical schema keys.
+// ---------------------------------------------------------------------------
+
+function normaliseKey(key: string) {
+  return key.toLowerCase().replace(/₂/g, '2').replace(/₃/g, '3').replace(/[^a-z0-9]/g, '');
+}
+
+const READING_ALIASES: Record<string, keyof ReportInput> = {
+  sitename: 'siteName',
+  location: 'location',
+  address: 'location',
+  latitude: 'latitude',
+  lat: 'latitude',
+  longitude: 'longitude',
+  lng: 'longitude',
+  long: 'longitude',
+  remarks: 'remarks',
+  notes: 'remarks',
+  projectcode: 'projectCode',
+  // date & time of reading
+  measuredat: 'measuredAt',
+  datetimeofreading: 'measuredAt',
+  dateandtimeofreading: 'measuredAt',
+  readingtime: 'measuredAt',
+  readingdatetime: 'measuredAt',
+  datetime: 'measuredAt',
+  timestamp: 'measuredAt',
+  // pollutants
+  aqivalue: 'aqiValue',
+  aqi: 'aqiValue',
+  pm25: 'pm25',
+  pm10: 'pm10',
+  no2: 'no2',
+  so2: 'so2',
+  co: 'co',
+  o3: 'ozone',
+  ozone: 'ozone',
+  // environment
+  temperature: 'temperature',
+  temp: 'temperature',
+  humidity: 'humidity',
+  rh: 'humidity',
+  // provenance
+  projectsiteid: 'projectSiteId',
+  siteid: 'projectSiteId',
+  projectid: 'projectSiteId',
+  aqimonitoringstationdeviceid: 'monitoringStationId',
+  monitoringstationid: 'monitoringStationId',
+  monitoringstationdeviceid: 'monitoringStationId',
+  stationid: 'monitoringStationId',
+  deviceid: 'monitoringStationId',
+  stationdeviceid: 'monitoringStationId',
+  oem: 'oem',
+  manufacturer: 'oem',
+  model: 'deviceModel',
+  devicemodel: 'deviceModel',
+  datasourceintegrationmethod: 'integrationMethod',
+  integrationmethod: 'integrationMethod',
+  datasource: 'integrationMethod',
+  otherapplicableenvironmentalparameters: 'otherParams',
+  otherenvironmentalparameters: 'otherParams',
+  environmentalparameters: 'otherParams',
+  otherparameters: 'otherParams',
+  otherparams: 'otherParams',
+};
+
+/**
+ * Maps arbitrary incoming keys onto the canonical reading fields. Unknown keys
+ * are dropped (the schema ignores them anyway). "Data Receipt Timestamp" is
+ * intentionally not mapped — the server always stamps it.
+ */
+export function normaliseReadingFields(input: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(input)) {
+    const canonical = READING_ALIASES[normaliseKey(key)] ?? key;
+    // Don't let an alias clobber a value already set under the canonical name.
+    if (out[canonical] === undefined) out[canonical] = value;
+  }
+  return out;
+}
 
 export const reviewSchema = z.object({
   status: z.enum(['SUBMITTED', 'UNDER_REVIEW', 'APPROVED', 'REJECTED']),

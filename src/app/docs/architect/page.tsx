@@ -136,22 +136,57 @@ Content-Type: application/json
 
           <Section id="data" title="3. Send AQI data">
             <Endpoint method="POST" path="/api/architect/data" />
-            <p>Authenticate with the token. Two content types are accepted.</p>
-            <p className="font-medium text-slate-900">a) JSON (readings only):</p>
+            <p>Authenticate with the token. Two content types are accepted. Each call inserts one
+              reading row, so a monitoring station can post on a schedule (e.g. every 3 hours).</p>
+            <p className="font-medium text-slate-900">a) JSON — full monitoring-station payload:</p>
             <Code>{`POST /api/architect/data
 Authorization: Bearer cidco_tok_xxxxxxxxxxxxxxxx
 Content-Type: application/json
 
 {
-  "siteName": "Kharghar Sector 12 Site",
-  "location": "Kharghar, Navi Mumbai",
-  "measuredAt": "2026-08-12T09:30:00Z",
-  "aqiValue": 168,
-  "pm25": 72.1, "pm10": 150.4,
-  "latitude": 19.0330, "longitude": 73.0630,
-  "projectCode": "CIDCO-KHR-012",
-  "remarks": "Morning reading"
+  "projectSiteId": "CIDCO-KHR-012",
+  "monitoringStationId": "STN-KHR-07",
+  "oem": "Aeroqual",
+  "deviceModel": "AQY-1",
+  "measuredAt": "2026-08-14T06:00:00Z",
+  "aqiValue": 176,
+  "pm25": 78.3, "pm10": 152.9,
+  "no2": 41.2, "so2": 12.7, "co": 0.9, "ozone": 48.6,
+  "temperature": 33.4, "humidity": 62.1,
+  "integrationMethod": "Automated API (3h)",
+  "otherParams": { "windSpeed": 3.2, "windDir": "NW", "noise_dB": 58 }
 }`}</Code>
+            <p className="text-sm text-slate-600">
+              Parameters (all optional except <code className="rounded bg-slate-100 px-1">measuredAt</code>
+              {' '}and <code className="rounded bg-slate-100 px-1">aqiValue</code>):
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="border-b border-slate-200 text-slate-500">
+                  <tr><th className="py-2 pr-4 font-medium">Field</th><th className="py-2 pr-4 font-medium">Parameter</th><th className="py-2 font-medium">Also accepts</th></tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-mono text-slate-700">
+                  <tr><td className="py-1.5 pr-4">projectSiteId</td><td className="py-1.5 pr-4 font-sans text-slate-600">Project / Site ID</td><td className="py-1.5 font-sans text-slate-400">siteId, Project/Site ID</td></tr>
+                  <tr><td className="py-1.5 pr-4">monitoringStationId</td><td className="py-1.5 pr-4 font-sans text-slate-600">AQI Monitoring Station / Device ID</td><td className="py-1.5 font-sans text-slate-400">stationId, deviceId</td></tr>
+                  <tr><td className="py-1.5 pr-4">oem</td><td className="py-1.5 pr-4 font-sans text-slate-600">OEM</td><td className="py-1.5 font-sans text-slate-400">manufacturer</td></tr>
+                  <tr><td className="py-1.5 pr-4">deviceModel</td><td className="py-1.5 pr-4 font-sans text-slate-600">Model</td><td className="py-1.5 font-sans text-slate-400">model</td></tr>
+                  <tr><td className="py-1.5 pr-4">measuredAt</td><td className="py-1.5 pr-4 font-sans text-slate-600">Date &amp; Time of Reading (ISO 8601)</td><td className="py-1.5 font-sans text-slate-400">dateTime, timestamp</td></tr>
+                  <tr><td className="py-1.5 pr-4">aqiValue</td><td className="py-1.5 pr-4 font-sans text-slate-600">AQI Value (0–1000)</td><td className="py-1.5 font-sans text-slate-400">aqi</td></tr>
+                  <tr><td className="py-1.5 pr-4">pm25 / pm10</td><td className="py-1.5 pr-4 font-sans text-slate-600">PM2.5 / PM10</td><td className="py-1.5 font-sans text-slate-400">PM2.5, PM10</td></tr>
+                  <tr><td className="py-1.5 pr-4">no2 / so2 / co / ozone</td><td className="py-1.5 pr-4 font-sans text-slate-600">NO₂ / SO₂ / CO / O₃</td><td className="py-1.5 font-sans text-slate-400">o3</td></tr>
+                  <tr><td className="py-1.5 pr-4">temperature</td><td className="py-1.5 pr-4 font-sans text-slate-600">Temperature (°C)</td><td className="py-1.5 font-sans text-slate-400">temp</td></tr>
+                  <tr><td className="py-1.5 pr-4">humidity</td><td className="py-1.5 pr-4 font-sans text-slate-600">Humidity (% RH)</td><td className="py-1.5 font-sans text-slate-400">rh</td></tr>
+                  <tr><td className="py-1.5 pr-4">integrationMethod</td><td className="py-1.5 pr-4 font-sans text-slate-600">Data Source / Integration Method</td><td className="py-1.5 font-sans text-slate-400">dataSource</td></tr>
+                  <tr><td className="py-1.5 pr-4">otherParams</td><td className="py-1.5 pr-4 font-sans text-slate-600">Other environmental parameters (object)</td><td className="py-1.5 font-sans text-slate-400">—</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p className="text-xs text-slate-500">
+              CIDCO stamps the <strong>Data Receipt Timestamp</strong> (<code className="rounded bg-slate-100 px-1">receivedAt</code>)
+              on arrival — you don&rsquo;t send it. If you omit <code className="rounded bg-slate-100 px-1">siteName</code>/
+              <code className="rounded bg-slate-100 px-1">location</code> (typical for a station feed), CIDCO fills them from the
+              Project/Site and Station IDs.
+            </p>
             <p className="font-medium text-slate-900">b) multipart/form-data (readings + signed document + AQI board photos):</p>
             <Code>{`POST /api/architect/data
 Authorization: Bearer cidco_tok_xxxxxxxxxxxxxxxx
@@ -173,11 +208,34 @@ boardPhotos=<file>     # photo of the AQI display board (repeatable)`}</Code>
 }`}</Code>
             <p>
               <strong>401</strong> — missing / invalid / <em>expired</em> token. An expired token
-              returns a hint to raise a token request (next section). Required fields:{' '}
-              <code className="rounded bg-slate-100 px-1">siteName</code>,{' '}
-              <code className="rounded bg-slate-100 px-1">location</code>,{' '}
-              <code className="rounded bg-slate-100 px-1">measuredAt</code> (ISO 8601),{' '}
-              <code className="rounded bg-slate-100 px-1">aqiValue</code> (0–1000).
+              returns a hint to raise a token request (next section).
+            </p>
+          </Section>
+
+          <Section id="automate" title="3a. Automating the feed (every 3 hours)">
+            <p>
+              Each POST inserts one reading, so schedule the request to run on your interval and the
+              database fills itself. In <strong>Postman</strong>:
+            </p>
+            <ul className="list-disc space-y-1 pl-6">
+              <li>Open the <em>Send AQI data</em> request → <strong>⋯ → Schedule run</strong> (or create a <strong>Monitor</strong>).</li>
+              <li>Set the interval to <strong>every 3 hours</strong>.</li>
+              <li>Keep <code className="rounded bg-slate-100 px-1">{'Authorization: Bearer {{token}}'}</code> in the headers.</li>
+              <li>Use the dynamic variable <code className="rounded bg-slate-100 px-1">{'{{$isoTimestamp}}'}</code> for <code className="rounded bg-slate-100 px-1">measuredAt</code> so every run stamps the current time.</li>
+            </ul>
+            <Code>{`{
+  "monitoringStationId": "STN-KHR-07",
+  "projectSiteId": "CIDCO-KHR-012",
+  "measuredAt": "{{$isoTimestamp}}",
+  "aqiValue": 176,
+  "pm25": 78.3, "pm10": 152.9, "no2": 41.2, "so2": 12.7, "co": 0.9, "ozone": 48.6,
+  "temperature": 33.4, "humidity": 62.1,
+  "integrationMethod": "Automated API (3h)"
+}`}</Code>
+            <p className="text-xs text-slate-500">
+              A token expires after 7 days, so a 3-hourly monitor keeps running until then — raise a
+              renewal (next section) before it lapses. Any cron/scheduler that can send an HTTP POST
+              works the same way.
             </p>
           </Section>
 

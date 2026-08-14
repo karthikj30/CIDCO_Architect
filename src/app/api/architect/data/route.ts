@@ -2,7 +2,7 @@ import type { NextRequest } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { fail, handleError, ok } from '@/lib/api';
 import { withLogging } from '@/lib/logger';
-import { reportSchema } from '@/lib/validation';
+import { normaliseReadingFields, reportSchema } from '@/lib/validation';
 import { createReport, type PendingAttachment } from '@/lib/reports';
 import { ALLOWED_DOCUMENT_TYPES, ALLOWED_IMAGE_TYPES, assertFileAllowed } from '@/lib/storage';
 import { authenticateToken, clientIp, logComm } from '@/lib/handshake';
@@ -60,7 +60,14 @@ export async function POST(req: NextRequest) {
         return fail('Send multipart/form-data (with document and boardPhotos) or application/json.', 415);
       }
 
-      const input = reportSchema.parse(fields);
+      // Accept human-readable / aliased keys, then fill in what an unattended
+      // station feed usually omits so a bare device payload still validates.
+      const raw = normaliseReadingFields(fields);
+      if (!raw.siteName) raw.siteName = raw.projectSiteId || raw.monitoringStationId || 'Automated station';
+      if (!raw.location) raw.location = raw.projectSiteId ? String(raw.projectSiteId) : 'N/A';
+      if (!raw.integrationMethod) raw.integrationMethod = 'Automated API';
+
+      const input = reportSchema.parse(raw);
 
       if (contentType.includes('multipart') && !attachments.some((a) => a.kind === 'AQI_BOARD_PHOTO')) {
         return fail('At least one AQI board photograph is required (field name: boardPhotos)', 422);
@@ -90,10 +97,24 @@ export async function POST(req: NextRequest) {
             referenceNo: report.referenceNo,
             status: report.status,
             source: report.source,
+            integrationMethod: report.integrationMethod,
+            projectSiteId: report.projectSiteId,
+            monitoringStationId: report.monitoringStationId,
+            oem: report.oem,
+            deviceModel: report.deviceModel,
             siteName: report.siteName,
-            aqiValue: report.aqiValue,
             measuredAt: report.measuredAt,
-            receivedAt: report.createdAt,
+            aqiValue: report.aqiValue,
+            pm25: report.pm25,
+            pm10: report.pm10,
+            no2: report.no2,
+            so2: report.so2,
+            co: report.co,
+            ozone: report.ozone,
+            temperature: report.temperature,
+            humidity: report.humidity,
+            otherParams: report.otherParams,
+            receivedAt: report.receivedAt,
             attachments: report.attachments.map((a) => ({
               id: a.id,
               kind: a.kind,

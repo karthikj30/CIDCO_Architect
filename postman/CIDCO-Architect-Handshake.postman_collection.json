@@ -242,10 +242,10 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"siteName\": \"Kharghar Sector 12 Site\",\n  \"location\": \"Kharghar, Navi Mumbai\",\n  \"measuredAt\": \"2026-08-12T09:30:00Z\",\n  \"aqiValue\": 168,\n  \"pm25\": 72.1,\n  \"pm10\": 150.4,\n  \"latitude\": 19.0330,\n  \"longitude\": 73.0630,\n  \"projectCode\": \"CIDCO-KHR-012\",\n  \"remarks\": \"Sent over the handshake channel\"\n}"
+              "raw": "{\n  \"projectSiteId\": \"CIDCO-KHR-012\",\n  \"monitoringStationId\": \"STN-KHR-07\",\n  \"oem\": \"Aeroqual\",\n  \"deviceModel\": \"AQY-1\",\n  \"measuredAt\": \"{{$isoTimestamp}}\",\n  \"aqiValue\": 176,\n  \"pm25\": 78.3,\n  \"pm10\": 152.9,\n  \"no2\": 41.2,\n  \"so2\": 12.7,\n  \"co\": 0.9,\n  \"ozone\": 48.6,\n  \"temperature\": 33.4,\n  \"humidity\": 62.1,\n  \"integrationMethod\": \"Automated API (3h)\",\n  \"otherParams\": { \"windSpeed\": 3.2, \"windDir\": \"NW\", \"noise_dB\": 58 }\n}"
             },
             "url": { "raw": "{{baseUrl}}/api/architect/data", "host": ["{{baseUrl}}"], "path": ["api", "architect", "data"] },
-            "description": "For photos, switch the body to form-data and add 'document' and 'boardPhotos' file fields."
+            "description": "Full monitoring-station payload. `measuredAt` uses the {{$isoTimestamp}} dynamic variable, so scheduling this request (⋯ → Schedule run, or a Monitor) every 3 hours feeds a fresh reading into CIDCO's database on each run. CIDCO stamps the Data Receipt Timestamp itself. For photos, switch the body to form-data and add 'document' and 'boardPhotos' file fields."
           }
         },
         {

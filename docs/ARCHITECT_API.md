@@ -82,9 +82,10 @@ by default**. You do not call this endpoint yourself.
 
 ## 3. Send AQI data
 
-`POST /api/architect/data` — authenticate with `Authorization: Bearer <token>`.
+`POST /api/architect/data` — authenticate with `Authorization: Bearer <token>`. Each call inserts
+one reading row, so a monitoring station can post on a schedule.
 
-**a) JSON (readings only):**
+**Full monitoring-station payload (JSON):**
 
 ```
 POST /api/architect/data
@@ -93,34 +94,76 @@ Content-Type: application/json
 ```
 ```json
 {
-  "siteName": "Kharghar Sector 12 Site",
-  "location": "Kharghar, Navi Mumbai",
-  "measuredAt": "2026-08-12T09:30:00Z",
-  "aqiValue": 168,
-  "pm25": 72.1, "pm10": 150.4,
-  "latitude": 19.0330, "longitude": 73.0630,
-  "projectCode": "CIDCO-KHR-012",
-  "remarks": "Morning reading"
+  "projectSiteId": "CIDCO-KHR-012",
+  "monitoringStationId": "STN-KHR-07",
+  "oem": "Aeroqual",
+  "deviceModel": "AQY-1",
+  "measuredAt": "2026-08-14T06:00:00Z",
+  "aqiValue": 176,
+  "pm25": 78.3, "pm10": 152.9,
+  "no2": 41.2, "so2": 12.7, "co": 0.9, "ozone": 48.6,
+  "temperature": 33.4, "humidity": 62.1,
+  "integrationMethod": "Automated API (3h)",
+  "otherParams": { "windSpeed": 3.2, "windDir": "NW", "noise_dB": 58 }
 }
 ```
 
-**b) multipart/form-data (readings + signed document + AQI board photos):**
+**Parameters** (only `measuredAt` and `aqiValue` are required):
 
-| field | notes |
-|-------|-------|
-| `siteName`, `location`, `measuredAt`, `aqiValue` | required (`measuredAt` ISO 8601, `aqiValue` 0–1000) |
-| `pm25`, `pm10`, `so2`, `no2`, `co`, `ozone`, `latitude`, `longitude`, `projectCode`, `remarks` | optional |
-| `document` | signed AQI report — PDF / DOC / DOCX / TXT, ≤ 15 MB |
-| `boardPhotos` | photo of the AQI display board; repeat the field for several |
+| Field | Parameter | Also accepts |
+|-------|-----------|--------------|
+| `projectSiteId` | Project / Site ID | `siteId`, `Project/Site ID` |
+| `monitoringStationId` | AQI Monitoring Station / Device ID | `stationId`, `deviceId` |
+| `oem` | OEM | `manufacturer` |
+| `deviceModel` | Model | `model` |
+| `measuredAt` | Date & Time of Reading (ISO 8601) | `dateTime`, `timestamp` |
+| `aqiValue` | AQI Value (0–1000) | `aqi` |
+| `pm25` / `pm10` | PM2.5 / PM10 | `PM2.5`, `PM10` |
+| `no2` / `so2` / `co` / `ozone` | NO₂ / SO₂ / CO / O₃ | `o3` |
+| `temperature` | Temperature (°C) | `temp` |
+| `humidity` | Humidity (% RH) | `rh` |
+| `integrationMethod` | Data Source / Integration Method | `dataSource` |
+| `otherParams` | Other environmental parameters (object) | — |
+
+The **Data Receipt Timestamp** (`receivedAt`) is stamped by CIDCO on arrival — you don't send it.
+Field names are matched loosely, so you may send the human-readable labels (`"PM2.5"`, `"O₃"`,
+`"Station/Device ID"`, `"Data Source / Integration Method"`) directly. If you omit
+`siteName`/`location` (typical for a station feed), CIDCO fills them from the Project/Site and
+Station IDs.
+
+**multipart/form-data** is also accepted (readings + a signed `document` + repeatable `boardPhotos`
+files) for the report-style submission.
 
 **201 Created** — stored in CIDCO's database with a reference number:
 
 ```json
-{ "success": true, "data": { "report": { "referenceNo": "CIDCO/AQI/2026/00020", "aqiValue": 168, "receivedAt": "..." } } }
+{ "success": true, "data": { "report": { "referenceNo": "CIDCO/AQI/2026/00025", "aqiValue": 176, "receivedAt": "..." } } }
 ```
 
 **401** — missing / invalid / **expired** token. An expired token's message tells you to raise a
 renewal request (next section).
+
+### Automating the feed (every 3 hours)
+
+Each POST is one reading, so schedule it and the database fills itself. In **Postman**: open the
+*Send AQI data* request → **⋯ → Schedule run** (or create a **Monitor**), set the interval to
+**every 3 hours**, keep `Authorization: Bearer {{token}}`, and use the dynamic variable
+`{{$isoTimestamp}}` for `measuredAt` so each run stamps the current time:
+
+```json
+{
+  "monitoringStationId": "STN-KHR-07",
+  "projectSiteId": "CIDCO-KHR-012",
+  "measuredAt": "{{$isoTimestamp}}",
+  "aqiValue": 176,
+  "pm25": 78.3, "pm10": 152.9, "no2": 41.2, "so2": 12.7, "co": 0.9, "ozone": 48.6,
+  "temperature": 33.4, "humidity": 62.1,
+  "integrationMethod": "Automated API (3h)"
+}
+```
+
+Tokens last 7 days, so a 3-hourly monitor keeps running until then — raise a renewal before it
+lapses. Any cron/scheduler that can send an HTTP POST works the same way.
 
 ---
 

@@ -314,7 +314,10 @@ select your own files before sending.
 - **User** — architect or CIDCO officer; firm name and Council of Architecture number for architects.
 - **ApiKey** — hashed key, prefix for display, last-used timestamp, revocation.
 - **Project** — CIDCO project a report can be attached to via `projectCode`.
-- **Report** — the reading itself: AQI, pollutants, coordinates, source channel, review state.
+- **Report** — the reading itself: AQI, pollutants (PM2.5/PM10/NO₂/SO₂/CO/O₃), temperature,
+  humidity, station/device provenance (`projectSiteId`, `monitoringStationId`, `oem`,
+  `deviceModel`), `integrationMethod`, free-form `otherParams`, source channel, review state, and a
+  server-stamped `receivedAt` (data-receipt timestamp).
 - **Attachment** — `DOCUMENT`, `AQI_BOARD_PHOTO`, `CSV_SOURCE` or `OTHER`, stored on disk under
   `UPLOAD_DIR` with a random name and served only through the authorised `/api/files/:id` route.
 - **AuditLog** — registrations, logins, submissions, reviews and key lifecycle events.

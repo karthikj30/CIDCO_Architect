@@ -115,15 +115,26 @@ model Report {
   location      String
   latitude      Float?
   longitude     Float?
-  measuredAt    DateTime
+  measuredAt    DateTime // Date & Time of Reading
   aqiValue      Int
   pm25          Float?
   pm10          Float?
   so2           Float?
   no2           Float?
   co            Float?
-  ozone         Float?
+  ozone         Float? // O3
   remarks       String?
+
+  // Station / device provenance for automated AQI monitoring feeds.
+  projectSiteId       String? // Project / Site ID
+  monitoringStationId String? // AQI Monitoring Station / Device ID
+  oem                 String? // OEM / manufacturer
+  deviceModel         String? // Model
+  temperature         Float? // °C
+  humidity            Float? // % RH
+  integrationMethod   String? // Data Source / Integration Method (e.g. "Automated API (3h)")
+  otherParams         Json? // Other applicable environmental parameters
+  receivedAt          DateTime @default(now()) // Data Receipt Timestamp (when CIDCO stored it)
 
   reviewedBy    String?
   reviewNote    String?
@@ -139,6 +150,8 @@ model Report {
   @@index([userId])
   @@index([measuredAt])
   @@index([status])
+  @@index([monitoringStationId])
+  @@index([projectSiteId])
   @@map("reports")
 }
 

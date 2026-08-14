@@ -1,4 +1,4 @@
-import type { AttachmentKind, ReportSource } from '@prisma/client';
+import type { AttachmentKind, Prisma, ReportSource } from '@prisma/client';
 import { prisma } from './prisma';
 import type { ReportInput } from './validation';
 import { saveUpload, type StoredFile } from './storage';
@@ -85,6 +85,14 @@ export async function createReport(params: {
         co: input.co,
         ozone: input.ozone,
         remarks: input.remarks,
+        projectSiteId: input.projectSiteId,
+        monitoringStationId: input.monitoringStationId,
+        oem: input.oem,
+        deviceModel: input.deviceModel,
+        temperature: input.temperature,
+        humidity: input.humidity,
+        integrationMethod: input.integrationMethod,
+        otherParams: input.otherParams == null ? undefined : (input.otherParams as Prisma.InputJsonValue),
         attachments: {
           create: stored.map((s) => ({
             kind: s.kind,
