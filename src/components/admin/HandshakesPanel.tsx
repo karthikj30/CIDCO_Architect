@@ -2,6 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useState } from 'react';
 import CopyField, { StatusBadge } from './CopyField';
+import HandshakeTimeline from './HandshakeTimeline';
 
 type Handshake = {
   id: string;
@@ -205,7 +206,7 @@ type Detail = {
   credentialExpiresAt: string;
   tokens: Array<{ id: string; prefix: string; expiresAt: string; revokedAt: string | null; lastUsedAt: string | null; active: boolean }>;
   tokenRequests: Array<{ id: string; status: string; reason: string | null; requestedAt: string }>;
-  commLogs: Array<{ id: string; direction: string; event: string; statusCode: number | null; detail: string | null; createdAt: string }>;
+  commLogs: Array<{ id: string; direction: string; event: string; statusCode: number | null; detail: string | null; ip: string | null; createdAt: string }>;
 };
 
 function HandshakeDetail({ handshakeId, clientId, onChanged }: { handshakeId: string; clientId: string; onChanged: () => void }) {
@@ -335,25 +336,22 @@ function HandshakeDetail({ handshakeId, clientId, onChanged }: { handshakeId: st
         </div>
       </div>
 
-      {/* Comm log for this handshake */}
+      {/* Full activity timeline for this handshake */}
       <div className="rounded-lg border border-slate-200 bg-white p-4">
-        <h4 className="text-sm font-semibold text-slate-900">Communication log</h4>
-        <div className="mt-2 max-h-56 overflow-auto">
-          <table className="w-full text-left text-xs">
-            <tbody className="divide-y divide-slate-100">
-              {detail.commLogs.map((l) => (
-                <tr key={l.id}>
-                  <td className="py-1.5 pr-3 text-slate-400 whitespace-nowrap">{fmt(l.createdAt)}</td>
-                  <td className="py-1.5 pr-3">
-                    <span className={`rounded px-1.5 py-0.5 font-medium ${l.direction === 'ARCHITECT_TO_ADMIN' ? 'bg-blue-50 text-blue-700' : 'bg-slate-100 text-slate-600'}`}>
-                      {l.event}
-                    </span>
-                  </td>
-                  <td className="py-1.5 text-slate-600">{l.detail}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="mb-3 flex items-center justify-between">
+          <div>
+            <h4 className="text-sm font-semibold text-slate-900">Handshake activity</h4>
+            <p className="text-xs text-slate-500">Everything that happened, oldest first.</p>
+          </div>
+          <button
+            onClick={() => load()}
+            className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            Refresh
+          </button>
+        </div>
+        <div className="max-h-96 overflow-auto pr-1">
+          <HandshakeTimeline logs={detail.commLogs} />
         </div>
       </div>
     </div>

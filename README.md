@@ -39,8 +39,10 @@ manages it from the dashboard**; the **architect drives it from Postman** — th
    reading is written to PostgreSQL automatically.
 5. **Renewal** — the architect raises `POST /api/architect/token-requests`; the officer approves it
    from the *Token Requests* tab and a fresh 7-day token is issued.
-6. **Logs** — every step is recorded with a timestamp and shown to the officer (*Communication Logs*
-   tab, `GET /api/admin/comm-logs`) and to the architect (`GET /api/architect/logs`).
+6. **Logs** — every step is recorded with a timestamp and shown to the officer as a chronological
+   **activity timeline** — on each handshake's *Manage* panel and in the *Communication Logs* tab
+   (filter by handshake, Timeline/Table views, live refresh; `GET /api/admin/comm-logs`) — and to
+   the architect (`GET /api/architect/logs`).
 
 **Admin endpoints** (CIDCO officer session):
 
