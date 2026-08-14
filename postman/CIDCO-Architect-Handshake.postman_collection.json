@@ -1,0 +1,291 @@
+{
+  "info": {
+    "name": "CIDCO Architect Handshake & Token Flow",
+    "description": "End-to-end handshake, token and data flow between an architect and the CIDCO admin.\n\n## How to run\n1. Set the `baseUrl` variable (default http://localhost:3000).\n2. **Admin > Officer login** — signs in as the CIDCO officer (sets the session cookie for the admin calls).\n3. **Admin > Issue handshake credentials** — issues {clientId, clientSecret, expiryDate} for an architect. The collection saves clientId + clientSecret into variables automatically.\n4. **Architect > Validate** — the architect validates. 200 = established, 504 = rejected.\n5. **Admin > Generate token** — mints a 7-day API token (saved to `token`).\n6. **Architect > Send AQI data** — posts a reading with the Bearer token.\n7. **Architect > Raise token request** then **Admin > List / Approve token request** — the renewal loop.\n8. **Architect > Status / Logs** — the architect's timestamped view.\n\nThe admin requests rely on the session cookie set by 'Officer login'. The architect requests use only the credentials/token, exactly as an external system would from Postman.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3000" },
+    { "key": "adminEmail", "value": "officer@cidco.example" },
+    { "key": "adminPassword", "value": "Password123" },
+    { "key": "architectEmail", "value": "architect@example.com" },
+    { "key": "clientId", "value": "" },
+    { "key": "clientSecret", "value": "" },
+    { "key": "handshakeId", "value": "" },
+    { "key": "token", "value": "" },
+    { "key": "tokenRequestId", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Admin (CIDCO officer)",
+      "item": [
+        {
+          "name": "Officer login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('logged in', () => pm.response.to.have.status(200));",
+                  "const u = pm.response.json().data.user;",
+                  "pm.expect(u.role).to.not.eql('ARCHITECT');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{adminEmail}}\",\n  \"password\": \"{{adminPassword}}\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/auth/login", "host": ["{{baseUrl}}"], "path": ["api", "auth", "login"] },
+            "description": "Signs in the CIDCO officer. Sets an httpOnly session cookie that the admin requests below reuse."
+          }
+        },
+        {
+          "name": "Issue handshake credentials",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('issued', () => pm.response.to.have.status(201));",
+                  "const c = pm.response.json().data.credential;",
+                  "const h = pm.response.json().data.handshake;",
+                  "pm.collectionVariables.set('clientId', c.clientId);",
+                  "pm.collectionVariables.set('clientSecret', c.clientSecret);",
+                  "pm.collectionVariables.set('handshakeId', h.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"architectEmail\": \"{{architectEmail}}\",\n  \"expiresInDays\": 30\n}" },
+            "url": { "raw": "{{baseUrl}}/api/admin/handshakes", "host": ["{{baseUrl}}"], "path": ["api", "admin", "handshakes"] },
+            "description": "Issues the credential JSON to hand to the architect. clientSecret is returned once."
+          }
+        },
+        {
+          "name": "List handshakes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/admin/handshakes", "host": ["{{baseUrl}}"], "path": ["api", "admin", "handshakes"] }
+          }
+        },
+        {
+          "name": "Generate token (after architect validates)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('token issued', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('token', pm.response.json().data.token.token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"clientId\": \"{{clientId}}\",\n  \"clientSecret\": \"{{clientSecret}}\",\n  \"expiresInDays\": 7\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/handshakes/{{handshakeId}}/tokens",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "admin", "handshakes", "{{handshakeId}}", "tokens"]
+            },
+            "description": "Mints a 7-day API token for the established handshake. Fails with 409 if the architect has not validated yet."
+          }
+        },
+        {
+          "name": "List token requests",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const rows = pm.response.json().data.tokenRequests;",
+                  "const pending = rows.find(r => r.status === 'PENDING');",
+                  "if (pending) pm.collectionVariables.set('tokenRequestId', pending.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/token-requests?status=PENDING",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "admin", "token-requests"],
+              "query": [{ "key": "status", "value": "PENDING" }]
+            }
+          }
+        },
+        {
+          "name": "Approve token request",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('approved', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('token', pm.response.json().data.token.token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"expiresInDays\": 7\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/token-requests/{{tokenRequestId}}/approve",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "admin", "token-requests", "{{tokenRequestId}}", "approve"]
+            }
+          }
+        },
+        {
+          "name": "Communication logs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/comm-logs?handshakeId={{handshakeId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "admin", "comm-logs"],
+              "query": [{ "key": "handshakeId", "value": "{{handshakeId}}" }]
+            }
+          }
+        },
+        {
+          "name": "Revoke handshake",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/handshakes/{{handshakeId}}/revoke",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "admin", "handshakes", "{{handshakeId}}", "revoke"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Architect (Postman only)",
+      "item": [
+        {
+          "name": "Validate — success (200, establishes channel)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('established', () => pm.response.to.have.status(200));",
+                  "pm.expect(pm.response.json().data.established).to.be.true;"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"clientId\": \"{{clientId}}\",\n  \"clientSecret\": \"{{clientSecret}}\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/architect/validate", "host": ["{{baseUrl}}"], "path": ["api", "architect", "validate"] }
+          }
+        },
+        {
+          "name": "Validate — failure (expect 504)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('rejected with 504', () => pm.response.to.have.status(504));"]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"clientId\": \"{{clientId}}\",\n  \"clientSecret\": \"hs_sec_wrong_secret\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/architect/validate", "host": ["{{baseUrl}}"], "path": ["api", "architect", "validate"] },
+            "description": "Demonstrates the 504 the CIDCO protocol returns when validation fails."
+          }
+        },
+        {
+          "name": "Send AQI data (Bearer token)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('stored', () => pm.response.to.have.status(201));"]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"siteName\": \"Kharghar Sector 12 Site\",\n  \"location\": \"Kharghar, Navi Mumbai\",\n  \"measuredAt\": \"2026-08-12T09:30:00Z\",\n  \"aqiValue\": 168,\n  \"pm25\": 72.1,\n  \"pm10\": 150.4,\n  \"latitude\": 19.0330,\n  \"longitude\": 73.0630,\n  \"projectCode\": \"CIDCO-KHR-012\",\n  \"remarks\": \"Sent over the handshake channel\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/architect/data", "host": ["{{baseUrl}}"], "path": ["api", "architect", "data"] },
+            "description": "For photos, switch the body to form-data and add 'document' and 'boardPhotos' file fields."
+          }
+        },
+        {
+          "name": "Raise token request",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('raised', () => pm.response.to.have.status(201));"]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"clientId\": \"{{clientId}}\",\n  \"clientSecret\": \"{{clientSecret}}\",\n  \"reason\": \"Current token expiring soon\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/architect/token-requests", "host": ["{{baseUrl}}"], "path": ["api", "architect", "token-requests"] }
+          }
+        },
+        {
+          "name": "Status",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "x-client-id", "value": "{{clientId}}" },
+              { "key": "x-client-secret", "value": "{{clientSecret}}" }
+            ],
+            "url": { "raw": "{{baseUrl}}/api/architect/status", "host": ["{{baseUrl}}"], "path": ["api", "architect", "status"] }
+          }
+        },
+        {
+          "name": "Logs (timestamped)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/architect/logs", "host": ["{{baseUrl}}"], "path": ["api", "architect", "logs"] }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -33,6 +33,26 @@ enum AttachmentKind {
   OTHER
 }
 
+// --- Architect ⇄ CIDCO handshake / token-based integration -----------------
+
+enum HandshakeStatus {
+  PENDING // admin issued credentials, architect has not validated yet
+  ESTABLISHED // architect validated and admin confirmed — 2-way channel open
+  EXPIRED // the admin-set credential expiry date has passed
+  REVOKED // admin manually revoked the handshake
+}
+
+enum CommDirection {
+  ADMIN_TO_ARCHITECT
+  ARCHITECT_TO_ADMIN
+}
+
+enum TokenRequestStatus {
+  PENDING
+  FULFILLED
+  REJECTED
+}
+
 model User {
   id           String   @id @default(cuid())
   email        String   @unique
@@ -46,8 +66,9 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  apiKeys ApiKey[]
-  reports Report[]
+  apiKeys    ApiKey[]
+  reports    Report[]
+  handshakes ArchitectHandshake[] @relation("ArchitectHandshakes")
 
   @@map("users")
 }
@@ -164,4 +185,97 @@ model ApiRequestLog {
   @@index([userId])
   @@index([endpoint])
   @@map("api_request_logs")
+}
+
+/// Credentials the CIDCO admin issues to an architect. The architect uses the
+/// clientId + secret to validate (POST /api/architect/validate); once that
+/// succeeds the handshake becomes ESTABLISHED and the 2-way channel is open.
+model ArchitectHandshake {
+  id                  String          @id @default(cuid())
+  architectId         String
+  // The "userid" half of the credential the admin hands over. Public-ish.
+  clientId            String          @unique
+  // Only the hash of the "password" half is stored; plaintext shown once.
+  secretHash          String
+  secretPrefix        String
+  // Expiry date of the credential, set by the admin (point 2 of the spec).
+  credentialExpiresAt DateTime
+  status              HandshakeStatus @default(PENDING)
+  architectValidatedAt DateTime?
+  establishedAt       DateTime?
+  lastValidatedIp     String?
+  createdById         String?
+  revokedAt           DateTime?
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  architect     User               @relation("ArchitectHandshakes", fields: [architectId], references: [id], onDelete: Cascade)
+  tokens        IntegrationToken[]
+  tokenRequests TokenRequest[]
+  commLogs      CommunicationLog[]
+
+  @@index([architectId])
+  @@index([status])
+  @@map("architect_handshakes")
+}
+
+/// A bearer token the admin mints for an established handshake. The architect
+/// sends AQI data to POST /api/architect/data with this token. Tokens expire
+/// (default 7 days) which is why architects can raise renewal requests.
+model IntegrationToken {
+  id            String    @id @default(cuid())
+  handshakeId   String
+  tokenHash     String    @unique
+  prefix        String
+  expiresAt     DateTime
+  revokedAt     DateTime?
+  lastUsedAt    DateTime?
+  createdById   String?
+  fromRequestId String?   @unique
+  createdAt     DateTime  @default(now())
+
+  handshake ArchitectHandshake @relation(fields: [handshakeId], references: [id], onDelete: Cascade)
+
+  @@index([handshakeId])
+  @@map("integration_tokens")
+}
+
+/// An architect's request for a fresh token (typically after expiry). The
+/// admin fulfils it by generating a new token.
+model TokenRequest {
+  id            String             @id @default(cuid())
+  handshakeId   String
+  reason        String?
+  status        TokenRequestStatus @default(PENDING)
+  requestedIp   String?
+  resolvedById  String?
+  issuedTokenId String?
+  requestedAt   DateTime           @default(now())
+  resolvedAt    DateTime?
+
+  handshake ArchitectHandshake @relation(fields: [handshakeId], references: [id], onDelete: Cascade)
+
+  @@index([handshakeId])
+  @@index([status])
+  @@map("token_requests")
+}
+
+/// Human-readable, timestamped record of every step of the handshake and every
+/// data transfer, so both the admin (dashboard) and the architect (API) can
+/// audit the exchange. Never stores secrets.
+model CommunicationLog {
+  id          String        @id @default(cuid())
+  handshakeId String?
+  direction   CommDirection
+  event       String
+  statusCode  Int?
+  detail      String?
+  ip          String?
+  createdAt   DateTime      @default(now())
+
+  handshake ArchitectHandshake? @relation(fields: [handshakeId], references: [id], onDelete: SetNull)
+
+  @@index([handshakeId])
+  @@index([event])
+  @@map("communication_logs")
 }

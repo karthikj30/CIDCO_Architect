@@ -69,3 +69,47 @@ export const reviewSchema = z.object({
 export const apiKeySchema = z.object({
   label: z.string().min(2, 'Label is required').max(60),
 });
+
+// --- Handshake / token flow ------------------------------------------------
+
+export const createHandshakeSchema = z
+  .object({
+    architectId: z.string().optional(),
+    architectEmail: z.string().email().optional(),
+    // Credential validity window set by the admin. Either an explicit date or a
+    // number of days from now; defaults to 30 days when neither is given.
+    expiryDate: z
+      .union([z.string(), z.date()])
+      .optional()
+      .transform((v) => (v === undefined ? undefined : v instanceof Date ? v : new Date(v)))
+      .refine((d) => d === undefined || !Number.isNaN(d.getTime()), 'expiryDate must be a valid date'),
+    expiresInDays: z.coerce.number().int().positive().max(3650).optional(),
+    note: z.string().max(200).optional(),
+  })
+  .refine((v) => v.architectId || v.architectEmail, {
+    message: 'Provide architectId or architectEmail',
+    path: ['architectEmail'],
+  });
+
+export const validateHandshakeSchema = z.object({
+  clientId: z.string().min(3, 'clientId is required'),
+  clientSecret: z.string().min(3, 'clientSecret is required'),
+});
+
+export const tokenRequestSchema = z.object({
+  clientId: z.string().min(3, 'clientId is required'),
+  clientSecret: z.string().min(3, 'clientSecret is required'),
+  reason: z.string().max(300).optional(),
+});
+
+export const generateTokenSchema = z.object({
+  // The admin mints the token "using its user id and password" — the handshake
+  // credential pair must be supplied and must match.
+  clientId: z.string().min(3, 'clientId is required'),
+  clientSecret: z.string().min(3, 'clientSecret is required'),
+  expiresInDays: z.coerce.number().int().positive().max(365).optional(),
+});
+
+export const approveRequestSchema = z.object({
+  expiresInDays: z.coerce.number().int().positive().max(365).optional(),
+});
