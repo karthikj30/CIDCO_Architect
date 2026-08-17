@@ -9,8 +9,11 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body>{children}</body>
+    // suppressHydrationWarning: browser extensions (e.g. Grammarly) inject
+    // attributes like data-gr-ext-installed onto <html>/<body> before React
+    // hydrates, which would otherwise trip a hydration mismatch warning.
+    <html lang="en" suppressHydrationWarning>
+      <body suppressHydrationWarning>{children}</body>
     </html>
   );
 }

@@ -333,6 +333,29 @@ Report status flows `SUBMITTED → UNDER_REVIEW → APPROVED | REJECTED`.
 
 ---
 
+## Viewing the data
+
+Two ways to inspect what's in PostgreSQL:
+
+**1. On the dashboard — CIDCO Admin → AQI Data.** A live table of the `reports` table (every reading
+architects feed in) with all station/device columns, colour-coded AQI, search, source filter and
+pagination. It auto-refreshes every 5 s while **Live** is ticked, backed by
+`GET /api/admin/reports` (officer-only).
+
+**2. In your codespace / editor — Prisma Studio.** A full browser UI over every table:
+
+```bash
+npm run db:studio      # opens http://localhost:5555
+```
+
+Or query directly with psql:
+
+```bash
+psql "$DATABASE_URL" -c 'SELECT "referenceNo","monitoringStationId","aqiValue","receivedAt" FROM reports ORDER BY "receivedAt" DESC LIMIT 20;'
+```
+
+---
+
 ## Notes for production
 
 - Set a strong `JWT_SECRET`; cookies are marked `secure` automatically when `NODE_ENV=production`.
