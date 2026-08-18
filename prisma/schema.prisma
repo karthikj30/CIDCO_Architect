@@ -241,6 +241,9 @@ model IntegrationToken {
   tokenHash     String    @unique
   prefix        String
   expiresAt     DateTime
+  refreshTokenHash   String?   @unique
+  refreshTokenPrefix String?
+  refreshExpiresAt   DateTime?
   revokedAt     DateTime?
   lastUsedAt    DateTime?
   createdById   String?

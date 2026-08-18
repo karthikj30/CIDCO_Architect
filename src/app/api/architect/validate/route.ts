@@ -3,7 +3,7 @@ import { prisma } from '@/lib/prisma';
 import { fail, handleError, ok } from '@/lib/api';
 import { withLogging } from '@/lib/logger';
 import { validateHandshakeSchema } from '@/lib/validation';
-import { clientIp, logComm, verifyCredentials } from '@/lib/handshake';
+import { clientIp, logComm, verifyCredentials, generateToken, generateRefreshToken, DEFAULT_TOKEN_TTL_DAYS, DEFAULT_REFRESH_TOKEN_TTL_DAYS, addDays } from '@/lib/handshake';
 
 export const dynamic = 'force-dynamic';
 
@@ -71,10 +71,37 @@ export async function POST(req: NextRequest) {
           detail: 'Two-way channel established',
           ip,
         });
+        const { token, tokenHash, prefix } = generateToken();
+        const { token: refreshToken, tokenHash: refreshHash, prefix: refreshPrefix } = generateRefreshToken();
+        
+        await prisma.integrationToken.create({
+          data: {
+            handshakeId: handshake.id,
+            tokenHash: tokenHash,
+            prefix: prefix,
+            expiresAt: addDays(now, DEFAULT_TOKEN_TTL_DAYS),
+            refreshTokenHash: refreshHash,
+            refreshTokenPrefix: refreshPrefix,
+            refreshExpiresAt: addDays(now, DEFAULT_REFRESH_TOKEN_TTL_DAYS),
+          }
+        });
+
+        await logComm({
+          handshakeId: handshake.id,
+          direction: 'ADMIN_TO_ARCHITECT',
+          event: 'TOKEN_GENERATED',
+          statusCode: 200,
+          detail: 'Auto-generated access and refresh tokens after validation',
+          ip,
+        });
 
         return ok({
           message: 'Validated. Two-way communication established with CIDCO.',
           established: true,
+          accessToken: token,
+          refreshToken: refreshToken,
+          expiresInDays: DEFAULT_TOKEN_TTL_DAYS,
+          refreshExpiresInDays: DEFAULT_REFRESH_TOKEN_TTL_DAYS,
           handshake: {
             id: updated.id,
             clientId: updated.clientId,
@@ -83,8 +110,8 @@ export async function POST(req: NextRequest) {
             architect: updated.architect,
           },
           nextSteps: [
-            'Ask CIDCO to generate an API token for this handshake (or raise one via POST /api/architect/token-requests).',
-            'Send AQI data to POST /api/architect/data with header: Authorization: Bearer <token>.',
+            'Send AQI data to POST /api/architect/data with header: Authorization: Bearer <accessToken>.',
+            'If the access token expires, send the refresh token to POST /api/architect/refresh to get a new one.',
           ],
         });
       } catch (error) {

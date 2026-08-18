@@ -49,6 +49,14 @@ export function generateToken() {
   return { token, tokenHash: sha256(token), prefix: token.slice(0, 16) };
 }
 
+export const REFRESH_TOKEN_PREFIX = 'cidco_ref_';
+export const DEFAULT_REFRESH_TOKEN_TTL_DAYS = 30;
+
+export function generateRefreshToken() {
+  const token = `${REFRESH_TOKEN_PREFIX}${randomBytes(24).toString('hex')}`;
+  return { token, tokenHash: sha256(token), prefix: token.slice(0, 16) };
+}
+
 export function addDays(from: Date, days: number) {
   return new Date(from.getTime() + days * 24 * 60 * 60 * 1000);
 }
@@ -164,7 +172,7 @@ export async function authenticateToken(req: NextRequest): Promise<TokenCheck> {
   if (!token) return { ok: false, reason: 'Unknown integration token', expired: false };
   if (token.revokedAt) return { ok: false, reason: 'Integration token was revoked', expired: false };
   if (token.expiresAt.getTime() < Date.now()) {
-    return { ok: false, reason: 'Integration token has expired — raise a token request to get a new one', expired: true };
+    return { ok: false, reason: 'Integration token has expired — call POST /api/architect/refresh with your refresh token to get a new one', expired: true };
   }
   if (token.handshake.status !== 'ESTABLISHED') {
     return { ok: false, reason: 'Handshake is not established', expired: false };
