@@ -158,7 +158,7 @@
           }
         },
         {
-          "name": "Generate token pair (access + refresh)",
+          "name": "Generate tokens (mode: both | access | refresh)",
           "event": [
             {
               "listen": "test",
@@ -167,9 +167,9 @@
                 "exec": [
                   "pm.test('token issued', () => pm.response.to.have.status(201));",
                   "const t = pm.response.json().data.token;",
-                  "pm.collectionVariables.set('accessToken', t.accessToken);",
-                  "pm.collectionVariables.set('refreshToken', t.refreshToken);",
-                  "pm.collectionVariables.set('token', t.accessToken);"
+                  "if (t.accessToken) { pm.collectionVariables.set('accessToken', t.accessToken); pm.collectionVariables.set('token', t.accessToken); }",
+                  "if (t.refreshToken) pm.collectionVariables.set('refreshToken', t.refreshToken);",
+                  "console.log('mode:', pm.response.json().data.mode, '| access:', !!t.accessToken, '| refresh:', !!t.refreshToken);"
                 ]
               }
             }
@@ -184,7 +184,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"clientId\": \"{{clientId}}\",\n  \"clientSecret\": \"{{clientSecret}}\",\n  \"expiresInDays\": 7,\n  \"refreshExpiresInDays\": 30\n}"
+              "raw": "{\n  \"clientId\": \"{{clientId}}\",\n  \"clientSecret\": \"{{clientSecret}}\",\n  \"mode\": \"both\",\n  \"expiresInDays\": 7,\n  \"refreshExpiresInDays\": 30\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/admin/handshakes/{{handshakeId}}/tokens",
@@ -199,7 +199,7 @@
                 "tokens"
               ]
             },
-            "description": "Issues a full access+refresh pair for an ESTABLISHED handshake and revokes any earlier pair. 409 if the architect has not validated yet."
+            "description": "CIDCO chooses which token(s) to generate via `mode`:\n- **both** (default) \u2014 new access + refresh pair; revokes any earlier pair. Give the architect both.\n- **access** \u2014 new access token only; the current refresh token keeps working.\n- **refresh** \u2014 new refresh token only; the current access token keeps working.\n\nFields not generated come back as null. 409 if the handshake has no live pair yet (use mode 'both' first) or is not ESTABLISHED."
           }
         },
         {

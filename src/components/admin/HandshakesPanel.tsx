@@ -233,7 +233,12 @@ function HandshakeDetail({ handshakeId, clientId, onChanged }: { handshakeId: st
   const [notice, setNotice] = useState<string | null>(null);
   const [secret, setSecret] = useState('');
   const [busy, setBusy] = useState(false);
-  const [freshPair, setFreshPair] = useState<{ access: string; refresh: string } | null>(null);
+  // Which token(s) CIDCO wants to generate, and what came back.
+  const [mode, setMode] = useState<'both' | 'access' | 'refresh'>('both');
+  const [freshPair, setFreshPair] = useState<{ access: string | null; refresh: string | null } | null>(null);
+  // Read after mount so server and client markup match.
+  const [origin, setOrigin] = useState('');
+  useEffect(() => setOrigin(window.location.origin), []);
   // policy + expiry editors
   const [accessTtl, setAccessTtl] = useState('7');
   const [refreshTtl, setRefreshTtl] = useState('30');
@@ -321,6 +326,7 @@ function HandshakeDetail({ handshakeId, clientId, onChanged }: { handshakeId: st
         body: JSON.stringify({
           clientId,
           clientSecret: secret,
+          mode,
           expiresInDays: Number(accessTtl),
           refreshExpiresInDays: Number(refreshTtl),
         }),
@@ -328,6 +334,7 @@ function HandshakeDetail({ handshakeId, clientId, onChanged }: { handshakeId: st
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? 'Token generation failed');
       setFreshPair({ access: json.data.token.accessToken, refresh: json.data.token.refreshToken });
+      setNotice(json.data.message);
       setSecret('');
       await load();
       onChanged();
@@ -423,11 +430,42 @@ function HandshakeDetail({ handshakeId, clientId, onChanged }: { handshakeId: st
       <div className="grid gap-4 lg:grid-cols-2">
         {/* Generate token pair */}
         <form onSubmit={generateToken} className="rounded-lg border border-slate-200 bg-white p-4">
-          <h4 className="text-sm font-semibold text-slate-900">Generate access + refresh tokens</h4>
+          <h4 className="text-sm font-semibold text-slate-900">Generate tokens</h4>
           <p className="mt-1 text-xs text-slate-500">
             Requires the handshake to be ESTABLISHED. Paste the clientSecret you issued. Uses the
-            policy above ({accessTtl}d / {refreshTtl}d) and revokes any earlier pair.
+            policy above ({accessTtl}d access / {refreshTtl}d refresh).
           </p>
+
+          {/* Which token(s) to generate */}
+          <div className="mt-3">
+            <span className="mb-1.5 block text-xs font-medium text-slate-600">Token to generate</span>
+            <div className="grid grid-cols-3 overflow-hidden rounded-lg border border-slate-300">
+              {([
+                { key: 'both', label: 'Both' },
+                { key: 'access', label: 'Access only' },
+                { key: 'refresh', label: 'Refresh only' },
+              ] as const).map((opt, i) => (
+                <button
+                  key={opt.key}
+                  type="button"
+                  onClick={() => setMode(opt.key)}
+                  className={`px-2 py-1.5 text-xs font-medium transition-colors ${i > 0 ? 'border-l border-slate-300' : ''} ${
+                    mode === opt.key ? 'bg-cidco-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1.5 text-[11px] text-slate-500">
+              {mode === 'both'
+                ? 'New access + refresh pair. Revokes any earlier pair — the architect must be given both.'
+                : mode === 'access'
+                  ? 'New access token only; the current refresh token keeps working.'
+                  : 'New refresh token only; the current access token keeps working.'}
+            </p>
+          </div>
+
           <div className="mt-3 space-y-2">
             <input value={clientId} readOnly className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-600" />
             <input
@@ -443,16 +481,30 @@ function HandshakeDetail({ handshakeId, clientId, onChanged }: { handshakeId: st
               disabled={busy || detail.status !== 'ESTABLISHED'}
               className="w-full rounded-lg bg-cidco-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cidco-700 disabled:opacity-50"
             >
-              Generate token pair
+              {busy ? 'Generating…' : mode === 'both' ? 'Generate both tokens' : mode === 'access' ? 'Generate access token' : 'Generate refresh token'}
             </button>
             {detail.status !== 'ESTABLISHED' && (
               <p className="text-xs text-amber-700">Waiting for the architect to validate — status is {detail.status}.</p>
             )}
           </div>
+
           {freshPair && (
             <div className="mt-3 space-y-2">
-              <CopyField label="Access token (shown once)" value={freshPair.access} />
-              <CopyField label="Refresh token (shown once)" value={freshPair.refresh} />
+              {freshPair.access && <CopyField label="Access token (shown once)" value={freshPair.access} />}
+              {freshPair.refresh && <CopyField label="Refresh token (shown once)" value={freshPair.refresh} />}
+              <CopyField
+                label="Both tokens as JSON — send to the architect"
+                value={JSON.stringify(
+                  {
+                    ...(freshPair.access ? { accessToken: freshPair.access } : {}),
+                    ...(freshPair.refresh ? { refreshToken: freshPair.refresh } : {}),
+                    dataUrl: `${origin}/api/architect/data`,
+                    refreshUrl: `${origin}/api/architect/refresh`,
+                  },
+                  null,
+                  2,
+                )}
+              />
             </div>
           )}
         </form>

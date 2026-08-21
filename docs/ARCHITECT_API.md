@@ -237,6 +237,18 @@ and validate with your clientId + clientSecret (**CASE 3**).
 CIDCO officer fulfils from the dashboard. Use this only if the automatic refresh above is not
 available to you.
 
+### When CIDCO re-issues tokens to you
+
+CIDCO can regenerate tokens from its dashboard at any time and may send you:
+
+| What you receive | What to do |
+| ---------------- | ---------- |
+| **Both tokens** | Replace both. Your previous pair stops working immediately. |
+| **An access token only** | Replace the access token; **keep your existing refresh token**. |
+| **A refresh token only** | Replace the refresh token; **keep your existing access token**, so a running feed is not interrupted. |
+
+Whatever you are not given is unchanged and keeps working.
+
 ---
 
 ## 5. Status & logs

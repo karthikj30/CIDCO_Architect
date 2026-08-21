@@ -244,6 +244,11 @@ export const generateTokenSchema = z.object({
   clientSecret: z.string().min(3, 'clientSecret is required'),
   expiresInDays: z.coerce.number().int().positive().max(365).optional(),
   refreshExpiresInDays: z.coerce.number().int().positive().max(730).optional(),
+  // Which token(s) CIDCO wants to generate:
+  //   both    — a fresh pair, revoking the previous one (default)
+  //   access  — new access token only, keeping the current refresh token
+  //   refresh — new refresh token only, keeping the current access token
+  mode: z.enum(['both', 'access', 'refresh']).optional(),
 });
 
 export const approveRequestSchema = z.object({

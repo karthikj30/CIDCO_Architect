@@ -56,7 +56,20 @@ user id and password — i.e. repeat CASE 1.
 Each handshake carries its own `accessTokenTtlDays` / `refreshTokenTtlDays` (default 7 / 30) and an
 `enforceWhitelist` flag, all editable from the *Architect Handshakes → Manage* panel. Changes are
 saved to the backend and used by the API for every token issued afterwards. The officer can also set
-an explicit expiry date on the live pair, re-issue a pair, or reset the IP/device whitelist.
+an explicit expiry date on the live pair or reset the IP/device whitelist.
+
+*Choosing which token to generate*
+
+The Manage panel's **Generate tokens** card has a **Both / Access only / Refresh only** selector:
+
+| Choice | Effect |
+| ------ | ------ |
+| **Both** | New access **and** refresh token. Revokes the previous pair — hand the architect both. |
+| **Access only** | New access token; the architect's current **refresh token keeps working**. |
+| **Refresh only** | New refresh token; the architect's current **access token keeps working**, so a running 3-hourly feed is not interrupted. |
+
+Generated tokens are displayed in full with Copy buttons — individually and as one JSON block to send
+to the architect. Plaintext is shown **once**; afterwards only the prefix and expiry are visible.
 
 *Logs* — every step is timestamped in the communication log, shown to the officer as an activity
 timeline and to the architect via `GET /api/architect/logs`.
@@ -68,7 +81,7 @@ timeline and to the architect via `GET /api/architect/logs`.
 | `POST` | `/api/admin/handshakes` | Issue credentials for an architect (returns the credential JSON once) |
 | `GET` | `/api/admin/handshakes` | List handshakes and their state |
 | `GET` | `/api/admin/handshakes/:id` | Handshake detail: tokens, requests, comm log |
-| `POST` | `/api/admin/handshakes/:id/tokens` | Generate an access + refresh **pair** (needs `clientId` + `clientSecret`); revokes the previous pair |
+| `POST` | `/api/admin/handshakes/:id/tokens` | Generate tokens (needs `clientId` + `clientSecret`). `mode`: `both` (default, new pair — revokes the previous one), `access` (new access token only), `refresh` (new refresh token only) |
 | `PATCH` | `/api/admin/handshakes/:id/policy` | Set access/refresh expiry windows and whitelist enforcement |
 | `PATCH` | `/api/admin/handshakes/:id/token-expiry` | Set explicit expiry dates on the live token pair |
 | `DELETE` | `/api/admin/handshakes/:id/whitelist` | Clear the registered IP/device |
