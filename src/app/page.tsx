@@ -23,6 +23,9 @@ export default async function ApiPortalPage() {
               <p className="text-xs text-slate-500">API Portal</p>
             </div>
           </div>
+          <a href="/architect" className="text-xs font-medium text-slate-500 hover:text-slate-900">
+            Architect portal →
+          </a>
         </div>
       </header>
 

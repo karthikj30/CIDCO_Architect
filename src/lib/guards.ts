@@ -19,3 +19,18 @@ export async function requireCidco(req: NextRequest): Promise<GuardResult> {
   }
   return { user: auth.user };
 }
+
+/**
+ * The architect's own dashboard. Read-only views of their handshakes, tokens
+ * and readings — the protocol calls (validate / refresh / data) still go
+ * through the token-authenticated endpoints, exactly as an external system's
+ * would, so the dashboard never becomes a back door around the handshake.
+ */
+export async function requireArchitect(req: NextRequest): Promise<GuardResult> {
+  const auth = await authenticate(req);
+  if (!auth) return { error: unauthorized('Architect sign-in required.') };
+  if (auth.user.role !== 'ARCHITECT') {
+    return { error: forbidden('This endpoint is for architects only.') };
+  }
+  return { user: auth.user };
+}

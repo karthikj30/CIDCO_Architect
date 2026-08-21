@@ -190,14 +190,34 @@ npm run build && npm start
 
 The UI is a single-screen portal at `/` (tabs), plus the architect docs page:
 
-| Route              | Purpose                                                                 |
-| ------------------ | ----------------------------------------------------------------------- |
-| `/`                | CIDCO admin portal — API Tester, API Logs, and the CIDCO Admin tabs (Architect Handshakes, Token Requests, Communication Logs) |
-| `/docs/architect`  | Architect integration guide (validation, tokens, sending data)          |
+There are **two portals**, each with its own sign-in:
 
-The **CIDCO Admin** tabs require a CIDCO officer sign-in (seeded: `officer@cidco.example` /
-`Password123`); the sign-in reuses the existing `/api/auth/*` session. Architects have no UI —
-they use the `/api/architect/*` endpoints from Postman.
+| Route              | Portal | Purpose                                                        |
+| ------------------ | ------ | -------------------------------------------------------------- |
+| `/`                | CIDCO admin | API Tester, API Logs, AQI Data, Architect Handshakes, Token Requests, Communication Logs |
+| `/architect`       | Architect | Connection (validate / renew tokens), Send AQI data, My readings, Activity log |
+| `/docs/architect`  | — | Architect integration guide (validation, tokens, sending data)  |
+
+Seeded logins: CIDCO officer `officer@cidco.example` / `Password123`; architect
+`architect@example.com` / `Password123`. Both portals link to each other from the header.
+
+### Architect portal (`/architect`)
+
+The architect signs in with their own account and:
+
+- **Connection** — pastes the credential JSON CIDCO sent (or types clientId/secret), optionally
+  declares the IP and device to whitelist, and clicks **Validate**. CIDCO returns the access and
+  refresh tokens, which the portal stores **in that browser only** (`localStorage`). The panel shows
+  live expiry countdowns for both tokens, the handshake status as CIDCO sees it, and a **Renew access
+  token** button (CASE 2).
+- **Send AQI data** — a form covering every parameter, posted to `POST /api/architect/data` with the
+  access token: the same call a station makes every 3 hours. A 503 is rendered with its
+  `ACCESS_EXPIRED` / `BOTH_EXPIRED` reason and the exact next step.
+- **My readings** — the readings CIDCO accepted from this architect.
+- **Activity log** — their own timestamped exchange with CIDCO.
+
+The portal is a client of the same public API — it holds tokens the way an external system would and
+makes ordinary token-authenticated calls, so it is never a back door around the handshake.
 
 ---
 
