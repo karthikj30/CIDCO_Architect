@@ -75,10 +75,10 @@ export default function ArchitectApiDocs() {
           <h2 className="text-lg font-bold text-slate-900">The flow at a glance</h2>
           <ol className="mt-3 space-y-2 text-sm text-slate-700">
             <li><strong>1. CIDCO issues you a credential</strong> — a JSON bundle <code className="rounded bg-slate-100 px-1">{'{ clientId, clientSecret, expiryDate }'}</code>. (CIDCO does this from its dashboard and sends it to you.)</li>
-            <li><strong>2. You validate</strong> — <code className="rounded bg-slate-100 px-1">POST /api/architect/validate</code>. Correct credentials → <strong>200 OK</strong> and the two-way channel is established. Wrong/expired → <strong>504</strong>.</li>
-            <li><strong>3. CIDCO generates an API token</strong> for the established handshake (7-day expiry by default), and sends it to you.</li>
-            <li><strong>4. You send AQI data</strong> — <code className="rounded bg-slate-100 px-1">POST /api/architect/data</code> with <code className="rounded bg-slate-100 px-1">Authorization: Bearer &lt;token&gt;</code>. It is stored in CIDCO&rsquo;s database.</li>
-            <li><strong>5. When the token nears expiry, you raise a request</strong> — <code className="rounded bg-slate-100 px-1">POST /api/architect/token-requests</code>. CIDCO approves and issues a fresh token.</li>
+            <li><strong>2. You validate</strong> — <code className="rounded bg-slate-100 px-1">POST /api/architect/validate</code> with the credentials <em>plus your IP address and device info</em>. Correct → <strong>200 OK</strong>: CIDCO whitelists your IP/device and returns <strong>both an access token (7 d) and a refresh token (30 d)</strong>. Wrong/expired/not-whitelisted → <strong>504</strong>.</li>
+            <li><strong>3. You send AQI data</strong> — <code className="rounded bg-slate-100 px-1">POST /api/architect/data</code> with <code className="rounded bg-slate-100 px-1">Authorization: Bearer &lt;accessToken&gt;</code>, automated every 3 hours. Stored in CIDCO&rsquo;s database.</li>
+            <li><strong>4. CASE 2 — access token expires</strong> → the data call answers <strong>503</strong>. Send your refresh token to <code className="rounded bg-slate-100 px-1">POST /api/architect/refresh</code> for a new access token, then carry on.</li>
+            <li><strong>5. CASE 3 — refresh token expires</strong> → the pair is dead whatever the access token says, and the data call answers <strong>503</strong> telling you to re-authenticate. Go back to step 2 with your user id and password.</li>
             <li><strong>Anytime</strong> — check <code className="rounded bg-slate-100 px-1">/api/architect/status</code> and <code className="rounded bg-slate-100 px-1">/api/architect/logs</code>.</li>
           </ol>
         </div>
@@ -105,17 +105,28 @@ Content-Type: application/json
 
 {
   "clientId": "ARCH-582397C8A863",
-  "clientSecret": "hs_sec_50fda6539cf711974dc4e983c86ae95a..."
+  "clientSecret": "hs_sec_50fda6539cf711974dc4e983c86ae95a...",
+  "ipAddress": "203.0.113.9",
+  "deviceInfo": "RaspberryPi-4 | station STN-KHR-07"
 }`}</Code>
             <p><strong>200 OK</strong> — validated, channel established:</p>
             <Code>{`{
   "success": true,
   "data": {
-    "message": "Validated. Two-way communication established with CIDCO.",
     "established": true,
-    "handshake": { "clientId": "ARCH-582397C8A863", "status": "ESTABLISHED", ... }
+    "accessToken": "cidco_tok_…",      // send AQI data with this
+    "refreshToken": "cidco_ref_…",     // renew the access token with this
+    "expiresInDays": 7,
+    "refreshExpiresInDays": 30,
+    "whitelistedIp": "203.0.113.9",
+    "deviceInfo": "RaspberryPi-4 | station STN-KHR-07"
   }
 }`}</Code>
+            <p className="text-xs text-slate-500">
+              Your first validate whitelists that IP/device; later calls must come from the same IP.
+              Each validate issues a fresh pair and revokes the previous one. The 7/30-day windows are
+              set by CIDCO per architect, so always read the returned values.
+            </p>
             <p>
               <strong>504</strong> — validation failed (unknown clientId, wrong secret, expired or
               revoked credential). In the CIDCO protocol, 504 specifically means &ldquo;handshake not
@@ -125,12 +136,17 @@ Content-Type: application/json
 { "success": false, "error": "Validation failed: Invalid clientSecret" }`}</Code>
           </Section>
 
-          <Section id="token" title="2. Get your API token">
+          <Section id="token" title="2. Your tokens">
             <p>
-              Once your handshake is <strong>ESTABLISHED</strong>, CIDCO generates an API token for it
-              (using your clientId + secret) and sends it to you. Tokens expire — 7 days by default.
-              You do not call this endpoint yourself; CIDCO issues the token to you. The token looks
-              like <code className="rounded bg-slate-100 px-1">cidco_tok_…</code>.
+              Validation already gave you both tokens — there is no extra call. The access token
+              (<code className="rounded bg-slate-100 px-1">cidco_tok_…</code>) authenticates every data
+              send; the refresh token (<code className="rounded bg-slate-100 px-1">cidco_ref_…</code>)
+              renews it when it expires. Store both securely.
+            </p>
+            <p>
+              CIDCO can also re-issue a pair from its dashboard, and can change the validity windows or
+              set an explicit expiry date at any time — so treat the expiry values in each response as
+              the source of truth.
             </p>
           </Section>
 
@@ -239,22 +255,31 @@ boardPhotos=<file>     # photo of the AQI display board (repeatable)`}</Code>
             </p>
           </Section>
 
-          <Section id="renew" title="4. Request a new token (renewal)">
-            <Endpoint method="POST" path="/api/architect/token-requests" />
-            <p>Because tokens expire, raise a request when yours is close to expiry. Authenticate with your handshake credentials.</p>
-            <Code>{`POST /api/architect/token-requests
+          <Section id="renew" title="4. Renew the access token (CASE 2 / CASE 3)">
+            <Endpoint method="POST" path="/api/architect/refresh" />
+            <p>Run this when a data send answers <strong>503</strong> with <code className="rounded bg-slate-100 px-1">ACCESS_EXPIRED</code>.</p>
+            <Code>{`POST /api/architect/refresh
 Content-Type: application/json
 
-{
-  "clientId": "ARCH-582397C8A863",
-  "clientSecret": "hs_sec_...",
-  "reason": "Current token expiring soon"
-}`}</Code>
+{ "refreshToken": "cidco_ref_..." }`}</Code>
             <Code>{`{
   "success": true,
-  "data": { "request": { "id": "...", "status": "PENDING", "requestedAt": "..." } }
+  "data": {
+    "message": "Access token renewed. Keep using your existing refresh token.",
+    "accessToken": "cidco_tok_…",
+    "expiresInDays": 7
+  }
 }`}</Code>
-            <p>CIDCO reviews the request and issues a fresh token (7-day expiry), which it sends to you.</p>
+            <p>
+              Update your stored access token and resume sending. <strong>Your refresh token does not
+              change</strong> — keep the same one until its own window closes.
+            </p>
+            <p>
+              If this call itself returns <strong>503</strong> with{' '}
+              <code className="rounded bg-slate-100 px-1">BOTH_EXPIRED</code>, that is <strong>CASE 3</strong>:
+              the refresh token has lapsed, so re-authenticate with your clientId and clientSecret
+              (section 1) to get a brand-new pair.
+            </p>
           </Section>
 
           <Section id="status-logs" title="5. Status & logs">
@@ -279,12 +304,14 @@ x-client-secret: hs_sec_...
 
           <Section id="errors" title="Status codes">
             <ul className="list-disc space-y-1 pl-6">
-              <li><code className="rounded bg-slate-100 px-1">200</code> — validation succeeded / read OK.</li>
-              <li><code className="rounded bg-slate-100 px-1">201</code> — token request raised / data stored.</li>
-              <li><code className="rounded bg-slate-100 px-1">401</code> — missing/invalid/expired token on the data endpoint.</li>
-              <li><code className="rounded bg-slate-100 px-1">409</code> — handshake not yet established (validate first).</li>
-              <li><code className="rounded bg-slate-100 px-1">422</code> — invalid body (validation errors are listed under <code className="rounded bg-slate-100 px-1">details</code>).</li>
-              <li><code className="rounded bg-slate-100 px-1">504</code> — <strong>handshake validation failed</strong> (CIDCO protocol convention).</li>
+              <li><code className="rounded bg-slate-100 px-1">200</code> — validated / access token renewed / read OK.</li>
+              <li><code className="rounded bg-slate-100 px-1">201</code> — data stored.</li>
+              <li><code className="rounded bg-slate-100 px-1">401</code> — token missing, unknown or revoked.</li>
+              <li><code className="rounded bg-slate-100 px-1">403</code> — request came from a non-whitelisted IP.</li>
+              <li><code className="rounded bg-slate-100 px-1">409</code> — handshake not established yet.</li>
+              <li><code className="rounded bg-slate-100 px-1">422</code> — invalid body (see <code className="rounded bg-slate-100 px-1">details</code>).</li>
+              <li><strong><code className="rounded bg-slate-100 px-1">503</code></strong> — token expired. <code className="rounded bg-slate-100 px-1">ACCESS_EXPIRED</code> → refresh; <code className="rounded bg-slate-100 px-1">BOTH_EXPIRED</code> → re-validate.</li>
+              <li><code className="rounded bg-slate-100 px-1">504</code> — <strong>handshake validation failed</strong>.</li>
             </ul>
           </Section>
         </div>

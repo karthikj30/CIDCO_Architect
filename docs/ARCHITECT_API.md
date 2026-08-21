@@ -24,11 +24,10 @@ Base URL below is written as `{{baseUrl}}` (e.g. `http://localhost:3000`).
 | # | Who | Action | Endpoint |
 |---|-----|--------|----------|
 | 1 | CIDCO | Issues you a credential `{clientId, clientSecret, expiryDate}` | (admin dashboard) |
-| 2 | You | Validate the credential → channel established | `POST /api/architect/validate` |
-| 3 | CIDCO | Generates a 7-day API token for the established handshake | (admin dashboard) |
-| 4 | You | Send AQI data with the token | `POST /api/architect/data` |
-| 5 | You | Raise a renewal request when the token nears expiry | `POST /api/architect/token-requests` |
-| 6 | CIDCO | Approves the request, issues a fresh token | (admin dashboard) |
+| 2 | You | Validate with credentials **+ IP + device info** → CIDCO whitelists you and returns **both tokens** | `POST /api/architect/validate` |
+| 3 | You | Send AQI data with the access token, automated every 3 h | `POST /api/architect/data` |
+| 4 | You | Access token expired (503) → renew it with the refresh token | `POST /api/architect/refresh` |
+| 5 | You | Refresh token expired (503) → start again from step 2 | `POST /api/architect/validate` |
 | — | You | Check status / read the log any time | `GET /api/architect/status`, `GET /api/architect/logs` |
 
 ---
@@ -51,32 +50,52 @@ CIDCO issues this JSON out of band. The `clientSecret` is shown only once — st
 
 ---
 
-## 1. Validate — establish the two-way channel
+## 1. Validate — establish the channel and receive both tokens
 
 `POST /api/architect/validate`
 
+Send the credentials **plus the IP address and device info** you want CIDCO to whitelist.
+
 ```json
-{ "clientId": "ARCH-582397C8A863", "clientSecret": "hs_sec_..." }
+{
+  "clientId": "ARCH-582397C8A863",
+  "clientSecret": "hs_sec_...",
+  "ipAddress": "203.0.113.9",
+  "deviceInfo": "RaspberryPi-4 | station STN-KHR-07"
+}
 ```
 
-- **200 OK** — credentials correct, handshake is now `ESTABLISHED`, the two-way channel is open.
-- **504 Gateway Timeout** — validation failed (unknown `clientId`, wrong secret, expired or revoked
-  credential). In the CIDCO protocol, **504 specifically means "handshake not validated."**
+`ipAddress` and `deviceInfo` are optional — if you omit `ipAddress`, CIDCO uses the IP the request
+arrived from. On your **first** successful validate CIDCO whitelists that IP/device; afterwards every
+call (validate, refresh, data) must come from the same IP or it is refused.
+
+- **200 OK** — validated. The handshake becomes `ESTABLISHED` and CIDCO returns **both tokens**:
 
 ```jsonc
-// 200
-{ "success": true, "data": { "established": true, "handshake": { "status": "ESTABLISHED", ... } } }
-// 504
-{ "success": false, "error": "Validation failed: Invalid clientSecret" }
+{
+  "success": true,
+  "data": {
+    "established": true,
+    "accessToken": "cidco_tok_…",     // use this to send data
+    "refreshToken": "cidco_ref_…",    // use this to renew the access token
+    "expiresInDays": 7,
+    "refreshExpiresInDays": 30,
+    "accessTokenExpiresAt": "...",
+    "refreshTokenExpiresAt": "...",
+    "whitelistedIp": "203.0.113.9",
+    "deviceInfo": "RaspberryPi-4 | station STN-KHR-07"
+  }
+}
 ```
 
----
+- **504 Gateway Timeout** — validation failed (unknown `clientId`, wrong secret, expired/revoked
+  credential, or a non-whitelisted IP). In the CIDCO protocol **504 means "handshake not validated."**
 
-## 2. Get your API token
+Store both tokens. Each validate issues a fresh pair and **revokes the previous one**, so only one
+pair is ever live.
 
-Once the handshake is `ESTABLISHED`, the CIDCO officer generates an API token for it (using your
-`clientId` + `clientSecret`) and sends it to you. Tokens are **`cidco_tok_…`** and expire — **7 days
-by default**. You do not call this endpoint yourself.
+> The expiry windows (7 / 30 days by default) are set by CIDCO per architect from its dashboard, so
+> the values you receive may differ — always read `expiresInDays` / `refreshExpiresInDays`.
 
 ---
 
@@ -140,8 +159,26 @@ files) for the report-style submission.
 { "success": true, "data": { "report": { "referenceNo": "CIDCO/AQI/2026/00025", "aqiValue": 176, "receivedAt": "..." } } }
 ```
 
-**401** — missing / invalid / **expired** token. An expired token's message tells you to raise a
-renewal request (next section).
+**Token errors on this endpoint**
+
+| Code | When | What to do |
+|------|------|-----------|
+| **503** | Access token expired, refresh token still valid (**CASE 2**) | `POST /api/architect/refresh` with your refresh token |
+| **503** | Refresh token expired — the pair is dead, whatever the access token says (**CASE 3**) | `POST /api/architect/validate` with your clientId + clientSecret |
+| **403** | Request came from a non-whitelisted IP | Ask CIDCO to reset the whitelist |
+| **401** | Token missing, unknown or revoked | Re-validate |
+
+Both 503 responses carry a machine-readable hint:
+
+```jsonc
+{
+  "success": false,
+  "error": "Access token has expired. Please request a new access token using your refresh token (POST /api/architect/refresh).",
+  "details": { "reason": "ACCESS_EXPIRED", "action": "POST /api/architect/refresh with your refresh token" }
+}
+```
+
+Nothing is written to CIDCO's database when a send is rejected — resend after renewing.
 
 ### Automating the feed (every 3 hours)
 
@@ -167,19 +204,38 @@ lapses. Any cron/scheduler that can send an HTTP POST works the same way.
 
 ---
 
-## 4. Request a new token (renewal)
+## 4. Renew the access token (CASE 2)
 
-`POST /api/architect/token-requests` — authenticate with your handshake credentials.
-
-```json
-{ "clientId": "ARCH-582397C8A863", "clientSecret": "hs_sec_...", "reason": "Current token expiring soon" }
-```
+`POST /api/architect/refresh` — when a data send returns **503 / `ACCESS_EXPIRED`**.
 
 ```json
-{ "success": true, "data": { "request": { "id": "...", "status": "PENDING", "requestedAt": "..." } } }
+{ "refreshToken": "cidco_ref_..." }
 ```
 
-CIDCO reviews and issues a fresh 7-day token, which it sends to you.
+```jsonc
+{
+  "success": true,
+  "data": {
+    "message": "Access token renewed. Keep using your existing refresh token.",
+    "accessToken": "cidco_tok_…",
+    "expiresInDays": 7,
+    "accessTokenExpiresAt": "...",
+    "refreshTokenExpiresAt": "..."
+  }
+}
+```
+
+Update your stored access token and resume sending. **Your refresh token does not change** — keep
+using the same one until its own 30-day window closes.
+
+If the refresh token has itself expired this returns **503 / `BOTH_EXPIRED`** — go back to step 1
+and validate with your clientId + clientSecret (**CASE 3**).
+
+### Optional: ask CIDCO for a manual re-issue
+
+`POST /api/architect/token-requests` with `{ clientId, clientSecret, reason }` raises a ticket a
+CIDCO officer fulfils from the dashboard. Use this only if the automatic refresh above is not
+available to you.
 
 ---
 
@@ -210,12 +266,24 @@ x-client-secret: hs_sec_...
 
 | Code | Meaning |
 |------|---------|
-| 200 | Validation succeeded / read OK |
-| 201 | Token request raised / data stored |
-| 401 | Missing, invalid, or **expired** token on the data endpoint |
+| 200 | Validation succeeded / access token renewed / read OK |
+| 201 | Data stored |
+| 401 | Token missing, unknown or revoked |
+| 403 | Request came from a non-whitelisted IP |
 | 409 | Handshake not established yet — validate first |
 | 422 | Invalid body (see `details` for field errors) |
+| **503** | **Token expired** — `ACCESS_EXPIRED` → refresh; `BOTH_EXPIRED` → re-validate |
 | 504 | **Handshake validation failed** (CIDCO protocol convention) |
+
+---
+
+## The three cases at a glance
+
+| | Trigger | CIDCO responds | You do |
+|---|---|---|---|
+| **CASE 1** | First-time setup | 200 + access & refresh tokens, IP/device whitelisted | Store both, send data every 3 h |
+| **CASE 2** | Access token expired | **503** `ACCESS_EXPIRED` | `POST /refresh` with refresh token → new access token |
+| **CASE 3** | Refresh token expired (access token irrelevant) | **503** `BOTH_EXPIRED` | `POST /validate` with clientId + clientSecret → new pair |
 
 ---
 

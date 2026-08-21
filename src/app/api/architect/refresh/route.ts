@@ -1,19 +1,18 @@
 import type { NextRequest } from 'next/server';
+import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { fail, handleError, ok } from '@/lib/api';
 import { withLogging } from '@/lib/logger';
 import {
-  clientIp,
-  logComm,
-  generateToken,
-  generateRefreshToken,
-  sha256,
+  MSG_BOTH_EXPIRED,
+  REFRESH_TOKEN_PREFIX,
   addDays,
-  DEFAULT_TOKEN_TTL_DAYS,
-  DEFAULT_REFRESH_TOKEN_TTL_DAYS,
-  REFRESH_TOKEN_PREFIX
+  checkWhitelist,
+  clientIp,
+  generateToken,
+  logComm,
+  sha256,
 } from '@/lib/handshake';
-import { z } from 'zod';
 
 export const dynamic = 'force-dynamic';
 
@@ -21,14 +20,25 @@ const refreshSchema = z.object({
   refreshToken: z.string().min(1),
 });
 
+/**
+ * POST /api/architect/refresh
+ *
+ * CASE 2 — the access token expired. The architect presents the refresh token
+ * and CIDCO validates it, then issues a **new access token**. The refresh token
+ * itself is left in place until its own 30-day window closes, so an unattended
+ * feed can never lock itself out by losing a rotated refresh token.
+ *
+ * CASE 3 — if the refresh token has also expired, the pair is dead: the
+ * architect must re-authenticate with the user id and password.
+ */
 export async function POST(req: NextRequest) {
   return withLogging(
     req,
     async (req) => {
       try {
         const ip = clientIp(req);
-        
-        let body;
+
+        let body: unknown;
         try {
           body = await req.json();
         } catch {
@@ -36,91 +46,85 @@ export async function POST(req: NextRequest) {
         }
 
         const parsed = refreshSchema.safeParse(body);
-        if (!parsed.success) {
-          return fail('Missing or invalid refreshToken', 400);
-        }
+        if (!parsed.success) return fail('Missing or invalid refreshToken', 400);
         const { refreshToken } = parsed.data;
 
         if (!refreshToken.startsWith(REFRESH_TOKEN_PREFIX)) {
           return fail('Invalid refresh token format', 401);
         }
 
-        const tokenHash = sha256(refreshToken);
-
-        const tokenRecord = await prisma.integrationToken.findUnique({
-          where: { refreshTokenHash: tokenHash },
+        const record = await prisma.integrationToken.findUnique({
+          where: { refreshTokenHash: sha256(refreshToken) },
           include: { handshake: true },
         });
 
-        if (!tokenRecord) {
-          return fail('Invalid refresh token', 401);
+        if (!record) return fail('Invalid refresh token', 401);
+        if (record.revokedAt) return fail('This token pair has been revoked', 401);
+
+        // CASE 3 — refresh window closed: send them back to user id + password.
+        if (!record.refreshExpiresAt || record.refreshExpiresAt.getTime() < Date.now()) {
+          await logComm({
+            handshakeId: record.handshakeId,
+            direction: 'ADMIN_TO_ARCHITECT',
+            event: 'DATA_REJECTED',
+            statusCode: 503,
+            detail: 'Refresh token expired — architect must re-authenticate with user id and password',
+            ip,
+          });
+          return fail(MSG_BOTH_EXPIRED, 503, {
+            reason: 'BOTH_EXPIRED',
+            action: 'POST /api/architect/validate with your clientId and clientSecret',
+          });
         }
 
-        if (tokenRecord.revokedAt) {
-          return fail('Token has been revoked', 401);
-        }
-
-        if (!tokenRecord.refreshExpiresAt || tokenRecord.refreshExpiresAt.getTime() < Date.now()) {
-          return fail('Refresh token has expired. Please re-authenticate using /api/architect/validate', 401);
-        }
-
-        if (tokenRecord.handshake.status !== 'ESTABLISHED') {
+        if (record.handshake.status !== 'ESTABLISHED') {
           return fail('Handshake is not established', 401);
         }
 
-        // Generate new tokens
-        const { token: newAccessToken, tokenHash: newAccessHash, prefix: newAccessPrefix } = generateToken();
-        const { token: newRefreshToken, tokenHash: newRefreshHash, prefix: newRefreshPrefix } = generateRefreshToken();
-        const now = new Date();
-
-        // Transaction to revoke old and create new
-        await prisma.$transaction([
-          prisma.integrationToken.update({
-            where: { id: tokenRecord.id },
-            data: { revokedAt: now },
-          }),
-          prisma.integrationToken.create({
-            data: {
-              handshakeId: tokenRecord.handshakeId,
-              tokenHash: newAccessHash,
-              prefix: newAccessPrefix,
-              expiresAt: addDays(now, DEFAULT_TOKEN_TTL_DAYS),
-              refreshTokenHash: newRefreshHash,
-              refreshTokenPrefix: newRefreshPrefix,
-              refreshExpiresAt: addDays(now, DEFAULT_REFRESH_TOKEN_TTL_DAYS),
-            },
-          }),
-        ]);
+        const gate = checkWhitelist(record.handshake, ip);
+        if (!gate.ok) return fail(gate.reason, 403);
 
         await logComm({
-          handshakeId: tokenRecord.handshakeId,
+          handshakeId: record.handshakeId,
           direction: 'ARCHITECT_TO_ADMIN',
           event: 'TOKEN_REQUESTED',
           statusCode: 200,
-          detail: 'Refresh token used to request new tokens',
+          detail: 'Refresh token presented to renew the access token',
           ip,
         });
 
+        // Issue a new access token on the same row; the refresh token stands.
+        const access = generateToken();
+        const ttlDays = record.handshake.accessTokenTtlDays;
+        const updated = await prisma.integrationToken.update({
+          where: { id: record.id },
+          data: {
+            tokenHash: access.tokenHash,
+            prefix: access.prefix,
+            expiresAt: addDays(new Date(), ttlDays),
+          },
+        });
+
         await logComm({
-          handshakeId: tokenRecord.handshakeId,
+          handshakeId: record.handshakeId,
           direction: 'ADMIN_TO_ARCHITECT',
           event: 'TOKEN_GENERATED',
           statusCode: 200,
-          detail: 'Auto-generated new access and refresh tokens via rotation',
+          detail: `New access token ${access.prefix}… issued via refresh, valid ${ttlDays} day(s)`,
           ip,
         });
 
         return ok({
-          message: 'Tokens refreshed successfully.',
-          accessToken: newAccessToken,
-          refreshToken: newRefreshToken,
-          expiresInDays: DEFAULT_TOKEN_TTL_DAYS,
-          refreshExpiresInDays: DEFAULT_REFRESH_TOKEN_TTL_DAYS,
+          message: 'Access token renewed. Keep using your existing refresh token.',
+          accessToken: access.token,
+          expiresInDays: ttlDays,
+          accessTokenExpiresAt: updated.expiresAt,
+          refreshTokenExpiresAt: updated.refreshExpiresAt,
         });
       } catch (error) {
         return handleError(error);
       }
     },
-    { captureBody: false }
+    { captureBody: false },
   );
 }

@@ -5,7 +5,7 @@ import { withLogging } from '@/lib/logger';
 import { normaliseReadingFields, reportSchema } from '@/lib/validation';
 import { createReport, type PendingAttachment } from '@/lib/reports';
 import { ALLOWED_DOCUMENT_TYPES, ALLOWED_IMAGE_TYPES, assertFileAllowed } from '@/lib/storage';
-import { authenticateToken, clientIp, logComm } from '@/lib/handshake';
+import { authenticateToken, clientIp, handshakeIdForRequest, logComm } from '@/lib/handshake';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,8 +26,30 @@ export async function POST(req: NextRequest) {
       const ip = clientIp(req);
       const check = await authenticateToken(req);
       if (!check.ok) {
-        // 401 for auth problems; expired tokens carry a hint to renew.
-        return fail(check.reason, check.expired ? 401 : 401);
+        // Expired tokens answer 503 (CIDCO protocol convention) and tell the
+        // architect exactly how to recover: refresh token for CASE 2, user id +
+        // password for CASE 3. Everything else is a plain 401.
+        const expiry = check.failure === 'ACCESS_EXPIRED' || check.failure === 'BOTH_EXPIRED';
+        const status = expiry ? 503 : check.failure === 'IP_NOT_WHITELISTED' ? 403 : 401;
+
+        await logComm({
+          handshakeId: await handshakeIdForRequest(req),
+          direction: 'ADMIN_TO_ARCHITECT',
+          event: 'DATA_REJECTED',
+          statusCode: status,
+          detail: check.reason,
+          ip,
+        });
+
+        return fail(check.reason, status, {
+          reason: check.failure,
+          action:
+            check.failure === 'ACCESS_EXPIRED'
+              ? 'POST /api/architect/refresh with your refresh token'
+              : check.failure === 'BOTH_EXPIRED'
+                ? 'POST /api/architect/validate with your clientId and clientSecret'
+                : undefined,
+        });
       }
       const { token, handshake } = check;
 

@@ -36,14 +36,29 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
         lastValidatedIp: handshake.lastValidatedIp,
         architect: handshake.architect,
         createdAt: handshake.createdAt,
+        // Whitelist + token policy, edited from the dashboard.
+        whitelistedIp: handshake.whitelistedIp,
+        deviceInfo: handshake.deviceInfo,
+        whitelistedAt: handshake.whitelistedAt,
+        enforceWhitelist: handshake.enforceWhitelist,
+        accessTokenTtlDays: handshake.accessTokenTtlDays,
+        refreshTokenTtlDays: handshake.refreshTokenTtlDays,
         tokens: handshake.tokens.map((t) => ({
           id: t.id,
           prefix: t.prefix,
           expiresAt: t.expiresAt,
+          refreshPrefix: t.refreshTokenPrefix,
+          refreshExpiresAt: t.refreshExpiresAt,
           revokedAt: t.revokedAt,
           lastUsedAt: t.lastUsedAt,
           createdAt: t.createdAt,
-          active: !t.revokedAt && t.expiresAt.getTime() > now,
+          // A pair is live only while BOTH windows are open (CASE 3).
+          active:
+            !t.revokedAt &&
+            t.expiresAt.getTime() > now &&
+            !!t.refreshExpiresAt &&
+            t.refreshExpiresAt.getTime() > now,
+          refreshExpired: !t.refreshExpiresAt || t.refreshExpiresAt.getTime() <= now,
         })),
         tokenRequests: handshake.tokenRequests,
         commLogs: handshake.commLogs,

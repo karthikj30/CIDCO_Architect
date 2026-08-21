@@ -76,7 +76,11 @@ export type CommEvent =
   | 'TOKEN_REQUEST_REJECTED'
   | 'DATA_RECEIVED'
   | 'DATA_REJECTED'
-  | 'HANDSHAKE_REVOKED';
+  | 'HANDSHAKE_REVOKED'
+  | 'IP_WHITELISTED'
+  | 'WHITELIST_RESET'
+  | 'TOKEN_POLICY_UPDATED'
+  | 'TOKEN_EXPIRY_UPDATED';
 
 export async function logComm(params: {
   handshakeId: string | null;
@@ -152,9 +156,35 @@ export async function verifyCredentials(clientId: string, secret: string): Promi
   return { ok: true, handshake };
 }
 
+// Messages the architect's automated feed keys off. Kept as constants so the
+// data endpoint, the refresh endpoint and the docs all say the same thing.
+export const MSG_ACCESS_EXPIRED =
+  'Access token has expired. Please request a new access token using your refresh token (POST /api/architect/refresh).';
+export const MSG_BOTH_EXPIRED =
+  'Access token and refresh token have both expired. Please request a new access token and refresh token using your user id and password (POST /api/architect/validate).';
+
+/** Why a token was rejected — drives the HTTP status and the guidance message. */
+export type TokenFailure =
+  | 'MISSING'
+  | 'UNKNOWN'
+  | 'REVOKED'
+  | 'NOT_ESTABLISHED'
+  | 'ACCESS_EXPIRED' // CASE 2 — refresh still alive, renew with refresh token
+  | 'BOTH_EXPIRED' // CASE 3 — refresh dead, so the pair is dead: re-authenticate
+  | 'IP_NOT_WHITELISTED';
+
 export type TokenCheck =
   | { ok: true; token: IntegrationToken; handshake: ArchitectHandshake }
-  | { ok: false; reason: string; expired: boolean };
+  | { ok: false; reason: string; failure: TokenFailure };
+
+/**
+ * True when the token's refresh window has closed. Per the CIDCO protocol a
+ * dead refresh token kills the whole pair, whatever the access token's own
+ * expiry says (CASE 3).
+ */
+export function refreshWindowClosed(token: IntegrationToken) {
+  return !token.refreshExpiresAt || token.refreshExpiresAt.getTime() < Date.now();
+}
 
 /** Reads and validates the Bearer integration token on a data request. */
 export async function authenticateToken(req: NextRequest): Promise<TokenCheck> {
@@ -162,24 +192,133 @@ export async function authenticateToken(req: NextRequest): Promise<TokenCheck> {
   const bearer = header.toLowerCase().startsWith('bearer ') ? header.slice(7).trim() : '';
   const raw = bearer || req.headers.get('x-integration-token')?.trim() || '';
   if (!raw || !raw.startsWith(TOKEN_PREFIX)) {
-    return { ok: false, reason: 'Missing integration token. Send Authorization: Bearer <token>.', expired: false };
+    return { ok: false, reason: 'Missing integration token. Send Authorization: Bearer <token>.', failure: 'MISSING' };
   }
 
   const token = await prisma.integrationToken.findUnique({
     where: { tokenHash: sha256(raw) },
     include: { handshake: true },
   });
-  if (!token) return { ok: false, reason: 'Unknown integration token', expired: false };
-  if (token.revokedAt) return { ok: false, reason: 'Integration token was revoked', expired: false };
+  if (!token) return { ok: false, reason: 'Unknown integration token', failure: 'UNKNOWN' };
+  if (token.revokedAt) return { ok: false, reason: 'Integration token was revoked', failure: 'REVOKED' };
+
+  // CASE 3 takes priority: once the refresh token lapses the access token is
+  // dead too, no matter what its own expiry says.
+  if (refreshWindowClosed(token)) {
+    return { ok: false, reason: MSG_BOTH_EXPIRED, failure: 'BOTH_EXPIRED' };
+  }
+  // CASE 2: access expired but refresh still valid.
   if (token.expiresAt.getTime() < Date.now()) {
-    return { ok: false, reason: 'Integration token has expired — call POST /api/architect/refresh with your refresh token to get a new one', expired: true };
+    return { ok: false, reason: MSG_ACCESS_EXPIRED, failure: 'ACCESS_EXPIRED' };
   }
   if (token.handshake.status !== 'ESTABLISHED') {
-    return { ok: false, reason: 'Handshake is not established', expired: false };
+    return { ok: false, reason: 'Handshake is not established', failure: 'NOT_ESTABLISHED' };
   }
+
+  const gate = checkWhitelist(token.handshake, clientIp(req));
+  if (!gate.ok) return { ok: false, reason: gate.reason, failure: 'IP_NOT_WHITELISTED' };
 
   await prisma.integrationToken.update({ where: { id: token.id }, data: { lastUsedAt: new Date() } }).catch(() => {});
   return { ok: true, token, handshake: token.handshake };
+}
+
+/**
+ * Issues a fresh access + refresh pair for a handshake and revokes every token
+ * that came before it, so exactly one pair is ever live. This is the single
+ * issuance path used by validate, the admin dashboard and request approvals —
+ * a token can therefore never exist without its refresh half.
+ */
+export async function issueTokenPair(params: {
+  handshakeId: string;
+  accessTtlDays: number;
+  refreshTtlDays: number;
+  createdById?: string | null;
+  fromRequestId?: string | null;
+}) {
+  const { handshakeId, accessTtlDays, refreshTtlDays, createdById, fromRequestId } = params;
+  const now = new Date();
+  const access = generateToken();
+  const refresh = generateRefreshToken();
+
+  const [, record] = await prisma.$transaction([
+    prisma.integrationToken.updateMany({
+      where: { handshakeId, revokedAt: null },
+      data: { revokedAt: now },
+    }),
+    prisma.integrationToken.create({
+      data: {
+        handshakeId,
+        tokenHash: access.tokenHash,
+        prefix: access.prefix,
+        expiresAt: addDays(now, accessTtlDays),
+        refreshTokenHash: refresh.tokenHash,
+        refreshTokenPrefix: refresh.prefix,
+        refreshExpiresAt: addDays(now, refreshTtlDays),
+        createdById: createdById ?? null,
+        fromRequestId: fromRequestId ?? null,
+      },
+    }),
+  ]);
+
+  return {
+    record,
+    accessToken: access.token,
+    refreshToken: refresh.token,
+    accessExpiresAt: record.expiresAt,
+    refreshExpiresAt: record.refreshExpiresAt!,
+    accessTtlDays,
+    refreshTtlDays,
+  };
+}
+
+/**
+ * Best-effort lookup of the handshake behind a request, even when its token was
+ * rejected — so refusals still land on the right handshake's activity log.
+ */
+export async function handshakeIdForRequest(req: NextRequest): Promise<string | null> {
+  const header = req.headers.get('authorization') || '';
+  const bearer = header.toLowerCase().startsWith('bearer ') ? header.slice(7).trim() : '';
+  const raw = bearer || req.headers.get('x-integration-token')?.trim() || '';
+  if (!raw) return null;
+  const token = await prisma.integrationToken
+    .findUnique({ where: { tokenHash: sha256(raw) }, select: { handshakeId: true } })
+    .catch(() => null);
+  return token?.handshakeId ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// IP / device whitelist (CASE 1)
+// ---------------------------------------------------------------------------
+
+/** Normalises loopback forms so ::1 and 127.0.0.1 are treated as one host. */
+export function normaliseIp(ip: string | null | undefined) {
+  if (!ip) return null;
+  const v = ip.trim();
+  if (v === '::1' || v === '::ffff:127.0.0.1') return '127.0.0.1';
+  return v.startsWith('::ffff:') ? v.slice(7) : v;
+}
+
+export function fingerprintDevice(deviceInfo: string) {
+  return sha256(deviceInfo.trim().toLowerCase());
+}
+
+/**
+ * Enforces the IP whitelist recorded when the architect first validated.
+ * A handshake that has never been whitelisted, or has enforcement switched off
+ * by the admin, passes through.
+ */
+export function checkWhitelist(
+  handshake: ArchitectHandshake,
+  ip: string | null,
+): { ok: true } | { ok: false; reason: string } {
+  if (!handshake.enforceWhitelist || !handshake.whitelistedIp) return { ok: true };
+  const seen = normaliseIp(ip);
+  const allowed = normaliseIp(handshake.whitelistedIp);
+  if (seen && allowed && seen === allowed) return { ok: true };
+  return {
+    ok: false,
+    reason: `Request came from a non-whitelisted IP (${seen ?? 'unknown'}). This handshake is registered to ${allowed}. Ask CIDCO to reset the whitelist.`,
+  };
 }
 
 /**

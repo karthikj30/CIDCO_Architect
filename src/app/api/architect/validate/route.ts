@@ -3,7 +3,15 @@ import { prisma } from '@/lib/prisma';
 import { fail, handleError, ok } from '@/lib/api';
 import { withLogging } from '@/lib/logger';
 import { validateHandshakeSchema } from '@/lib/validation';
-import { clientIp, logComm, verifyCredentials, generateToken, generateRefreshToken, DEFAULT_TOKEN_TTL_DAYS, DEFAULT_REFRESH_TOKEN_TTL_DAYS, addDays } from '@/lib/handshake';
+import {
+  checkWhitelist,
+  clientIp,
+  fingerprintDevice,
+  issueTokenPair,
+  logComm,
+  normaliseIp,
+  verifyCredentials,
+} from '@/lib/handshake';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,7 +34,9 @@ export async function POST(req: NextRequest) {
     async (req) => {
       try {
         const ip = clientIp(req);
-        const { clientId, clientSecret } = validateHandshakeSchema.parse(await req.json());
+        const { clientId, clientSecret, ipAddress, deviceInfo } = validateHandshakeSchema.parse(
+          await req.json(),
+        );
 
         const check = await verifyCredentials(clientId, clientSecret);
         if (!check.ok) {
@@ -44,6 +54,25 @@ export async function POST(req: NextRequest) {
 
         const handshake = check.handshake;
         const now = new Date();
+
+        // The IP the architect declares wins; otherwise use the socket IP.
+        const presentedIp = normaliseIp(ipAddress) ?? normaliseIp(ip);
+
+        // If this handshake is already whitelisted, the caller must match it.
+        const gate = checkWhitelist(handshake, presentedIp);
+        if (!gate.ok) {
+          await logComm({
+            handshakeId: handshake.id,
+            direction: 'ARCHITECT_TO_ADMIN',
+            event: 'VALIDATION_FAILED',
+            statusCode: 504,
+            detail: gate.reason,
+            ip,
+          });
+          return fail(`Validation failed: ${gate.reason}`, 504);
+        }
+
+        const firstWhitelist = !handshake.whitelistedIp;
         const updated = await prisma.architectHandshake.update({
           where: { id: handshake.id },
           data: {
@@ -51,9 +80,25 @@ export async function POST(req: NextRequest) {
             architectValidatedAt: now,
             establishedAt: handshake.establishedAt ?? now,
             lastValidatedIp: ip,
+            // Whitelist the architect's IP + device on first successful validate.
+            whitelistedIp: handshake.whitelistedIp ?? presentedIp,
+            deviceInfo: deviceInfo ?? handshake.deviceInfo,
+            deviceFingerprint: deviceInfo ? fingerprintDevice(deviceInfo) : handshake.deviceFingerprint,
+            whitelistedAt: handshake.whitelistedAt ?? (presentedIp ? now : null),
           },
           include: { architect: { select: { id: true, name: true, email: true } } },
         });
+
+        if (firstWhitelist && presentedIp) {
+          await logComm({
+            handshakeId: handshake.id,
+            direction: 'ADMIN_TO_ARCHITECT',
+            event: 'IP_WHITELISTED',
+            statusCode: 200,
+            detail: `Whitelisted IP ${presentedIp}${deviceInfo ? ` · device: ${deviceInfo}` : ''}`,
+            ip,
+          });
+        }
 
         await logComm({
           handshakeId: handshake.id,
@@ -71,19 +116,12 @@ export async function POST(req: NextRequest) {
           detail: 'Two-way channel established',
           ip,
         });
-        const { token, tokenHash, prefix } = generateToken();
-        const { token: refreshToken, tokenHash: refreshHash, prefix: refreshPrefix } = generateRefreshToken();
-        
-        await prisma.integrationToken.create({
-          data: {
-            handshakeId: handshake.id,
-            tokenHash: tokenHash,
-            prefix: prefix,
-            expiresAt: addDays(now, DEFAULT_TOKEN_TTL_DAYS),
-            refreshTokenHash: refreshHash,
-            refreshTokenPrefix: refreshPrefix,
-            refreshExpiresAt: addDays(now, DEFAULT_REFRESH_TOKEN_TTL_DAYS),
-          }
+        // Expiry windows come from the handshake's policy, which CIDCO edits
+        // from the dashboard — so a dashboard change takes effect on the API.
+        const issued = await issueTokenPair({
+          handshakeId: handshake.id,
+          accessTtlDays: updated.accessTokenTtlDays,
+          refreshTtlDays: updated.refreshTokenTtlDays,
         });
 
         await logComm({
@@ -91,17 +129,21 @@ export async function POST(req: NextRequest) {
           direction: 'ADMIN_TO_ARCHITECT',
           event: 'TOKEN_GENERATED',
           statusCode: 200,
-          detail: 'Auto-generated access and refresh tokens after validation',
+          detail: `Access token (${issued.accessTtlDays}d) and refresh token (${issued.refreshTtlDays}d) issued after validation`,
           ip,
         });
 
         return ok({
           message: 'Validated. Two-way communication established with CIDCO.',
           established: true,
-          accessToken: token,
-          refreshToken: refreshToken,
-          expiresInDays: DEFAULT_TOKEN_TTL_DAYS,
-          refreshExpiresInDays: DEFAULT_REFRESH_TOKEN_TTL_DAYS,
+          accessToken: issued.accessToken,
+          refreshToken: issued.refreshToken,
+          expiresInDays: issued.accessTtlDays,
+          refreshExpiresInDays: issued.refreshTtlDays,
+          accessTokenExpiresAt: issued.accessExpiresAt,
+          refreshTokenExpiresAt: issued.refreshExpiresAt,
+          whitelistedIp: updated.whitelistedIp,
+          deviceInfo: updated.deviceInfo,
           handshake: {
             id: updated.id,
             clientId: updated.clientId,
@@ -111,7 +153,8 @@ export async function POST(req: NextRequest) {
           },
           nextSteps: [
             'Send AQI data to POST /api/architect/data with header: Authorization: Bearer <accessToken>.',
-            'If the access token expires, send the refresh token to POST /api/architect/refresh to get a new one.',
+            'If the access token expires (503), POST /api/architect/refresh with your refresh token.',
+            'If both tokens expire (503), validate again with your clientId and clientSecret.',
           ],
         });
       } catch (error) {

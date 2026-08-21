@@ -204,6 +204,31 @@ export const createHandshakeSchema = z
 export const validateHandshakeSchema = z.object({
   clientId: z.string().min(3, 'clientId is required'),
   clientSecret: z.string().min(3, 'clientSecret is required'),
+  // The architect declares the IP and device CIDCO should whitelist (CASE 1).
+  // Both optional: the socket IP is used when ipAddress is omitted.
+  ipAddress: z.string().max(64).optional(),
+  deviceInfo: z.string().max(300).optional(),
+});
+
+/** Admin edits the token expiry policy for a handshake from the dashboard. */
+export const tokenPolicySchema = z.object({
+  accessTokenTtlDays: z.coerce.number().int().positive().max(365).optional(),
+  refreshTokenTtlDays: z.coerce.number().int().positive().max(730).optional(),
+  enforceWhitelist: z.boolean().optional(),
+});
+
+/** Admin sets an explicit expiry date on the live token pair. */
+export const tokenExpirySchema = z.object({
+  accessExpiresAt: z
+    .union([z.string(), z.date()])
+    .optional()
+    .transform((v) => (v === undefined ? undefined : v instanceof Date ? v : new Date(v)))
+    .refine((d) => d === undefined || !Number.isNaN(d.getTime()), 'accessExpiresAt must be a valid date'),
+  refreshExpiresAt: z
+    .union([z.string(), z.date()])
+    .optional()
+    .transform((v) => (v === undefined ? undefined : v instanceof Date ? v : new Date(v)))
+    .refine((d) => d === undefined || !Number.isNaN(d.getTime()), 'refreshExpiresAt must be a valid date'),
 });
 
 export const tokenRequestSchema = z.object({
@@ -218,6 +243,7 @@ export const generateTokenSchema = z.object({
   clientId: z.string().min(3, 'clientId is required'),
   clientSecret: z.string().min(3, 'clientSecret is required'),
   expiresInDays: z.coerce.number().int().positive().max(365).optional(),
+  refreshExpiresInDays: z.coerce.number().int().positive().max(730).optional(),
 });
 
 export const approveRequestSchema = z.object({

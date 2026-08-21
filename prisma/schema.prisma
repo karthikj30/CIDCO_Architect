@@ -222,6 +222,19 @@ model ArchitectHandshake {
   createdAt           DateTime        @default(now())
   updatedAt           DateTime        @updatedAt
 
+  // --- IP / device whitelist (CASE 1) --------------------------------------
+  // Captured at the architect's first successful validate and enforced on
+  // every later call, so only the registered machine can use the tokens.
+  whitelistedIp       String?
+  deviceInfo          String?
+  deviceFingerprint   String? // sha256(deviceInfo), for constant-time compare
+  whitelistedAt       DateTime?
+  enforceWhitelist    Boolean         @default(true)
+
+  // --- Token expiry policy, editable by the admin from the dashboard -------
+  accessTokenTtlDays  Int             @default(7)
+  refreshTokenTtlDays Int             @default(30)
+
   architect     User               @relation("ArchitectHandshakes", fields: [architectId], references: [id], onDelete: Cascade)
   tokens        IntegrationToken[]
   tokenRequests TokenRequest[]

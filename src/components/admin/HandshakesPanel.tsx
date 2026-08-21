@@ -204,41 +204,130 @@ type Detail = {
   establishedAt: string | null;
   architectValidatedAt: string | null;
   credentialExpiresAt: string;
-  tokens: Array<{ id: string; prefix: string; expiresAt: string; revokedAt: string | null; lastUsedAt: string | null; active: boolean }>;
+  whitelistedIp: string | null;
+  deviceInfo: string | null;
+  whitelistedAt: string | null;
+  enforceWhitelist: boolean;
+  accessTokenTtlDays: number;
+  refreshTokenTtlDays: number;
+  tokens: Array<{
+    id: string; prefix: string; expiresAt: string; refreshPrefix: string | null;
+    refreshExpiresAt: string | null; revokedAt: string | null; lastUsedAt: string | null;
+    active: boolean; refreshExpired: boolean;
+  }>;
   tokenRequests: Array<{ id: string; status: string; reason: string | null; requestedAt: string }>;
   commLogs: Array<{ id: string; direction: string; event: string; statusCode: number | null; detail: string | null; ip: string | null; createdAt: string }>;
 };
 
+/** datetime-local needs `YYYY-MM-DDTHH:mm` in local time. */
+function toLocalInput(iso: string | null) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 function HandshakeDetail({ handshakeId, clientId, onChanged }: { handshakeId: string; clientId: string; onChanged: () => void }) {
   const [detail, setDetail] = useState<Detail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [secret, setSecret] = useState('');
-  const [tokenDays, setTokenDays] = useState('7');
   const [busy, setBusy] = useState(false);
-  const [freshToken, setFreshToken] = useState<string | null>(null);
+  const [freshPair, setFreshPair] = useState<{ access: string; refresh: string } | null>(null);
+  // policy + expiry editors
+  const [accessTtl, setAccessTtl] = useState('7');
+  const [refreshTtl, setRefreshTtl] = useState('30');
+  const [enforce, setEnforce] = useState(true);
+  const [accessExp, setAccessExp] = useState('');
+  const [refreshExp, setRefreshExp] = useState('');
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/admin/handshakes/${handshakeId}`);
     const json = await res.json();
-    if (res.ok) setDetail(json.data.handshake);
+    if (res.ok) {
+      const d: Detail = json.data.handshake;
+      setDetail(d);
+      setAccessTtl(String(d.accessTokenTtlDays));
+      setRefreshTtl(String(d.refreshTokenTtlDays));
+      setEnforce(d.enforceWhitelist);
+      const live = d.tokens.find((t) => !t.revokedAt);
+      setAccessExp(toLocalInput(live?.expiresAt ?? null));
+      setRefreshExp(toLocalInput(live?.refreshExpiresAt ?? null));
+    }
   }, [handshakeId]);
 
   useEffect(() => { void load(); }, [load]);
+
+  async function savePolicy(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true); setError(null); setNotice(null);
+    try {
+      const res = await fetch(`/api/admin/handshakes/${handshakeId}/policy`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          accessTokenTtlDays: Number(accessTtl),
+          refreshTokenTtlDays: Number(refreshTtl),
+          enforceWhitelist: enforce,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? 'Could not save policy');
+      setNotice('Token policy saved — applies to the next token issued.');
+      await load(); onChanged();
+    } catch (err) { setError((err as Error).message); } finally { setBusy(false); }
+  }
+
+  async function saveExpiry(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true); setError(null); setNotice(null);
+    try {
+      const res = await fetch(`/api/admin/handshakes/${handshakeId}/token-expiry`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          accessExpiresAt: accessExp ? new Date(accessExp).toISOString() : undefined,
+          refreshExpiresAt: refreshExp ? new Date(refreshExp).toISOString() : undefined,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? 'Could not update expiry');
+      setNotice('Live token expiry updated.');
+      await load(); onChanged();
+    } catch (err) { setError((err as Error).message); } finally { setBusy(false); }
+  }
+
+  async function resetWhitelist() {
+    if (!confirm('Clear the whitelisted IP/device? The next validate will register a new one.')) return;
+    setBusy(true); setError(null); setNotice(null);
+    try {
+      const res = await fetch(`/api/admin/handshakes/${handshakeId}/whitelist`, { method: 'DELETE' });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? 'Could not reset whitelist');
+      setNotice('Whitelist cleared.');
+      await load(); onChanged();
+    } catch (err) { setError((err as Error).message); } finally { setBusy(false); }
+  }
 
   async function generateToken(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError(null);
-    setFreshToken(null);
+    setFreshPair(null);
     try {
       const res = await fetch(`/api/admin/handshakes/${handshakeId}/tokens`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ clientId, clientSecret: secret, expiresInDays: Number(tokenDays) }),
+        body: JSON.stringify({
+          clientId,
+          clientSecret: secret,
+          expiresInDays: Number(accessTtl),
+          refreshExpiresInDays: Number(refreshTtl),
+        }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? 'Token generation failed');
-      setFreshToken(json.data.token.token);
+      setFreshPair({ access: json.data.token.accessToken, refresh: json.data.token.refreshToken });
       setSecret('');
       await load();
       onChanged();
@@ -266,14 +355,78 @@ function HandshakeDetail({ handshakeId, clientId, onChanged }: { handshakeId: st
   return (
     <div className="space-y-4">
       {error && <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</div>}
+      {notice && <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{notice}</div>}
+
+      {/* Token expiry policy + IP whitelist */}
+      <div className="grid gap-4 lg:grid-cols-2">
+        <form onSubmit={savePolicy} className="rounded-lg border border-slate-200 bg-white p-4">
+          <h4 className="text-sm font-semibold text-slate-900">Token expiry policy</h4>
+          <p className="mt-1 text-xs text-slate-500">
+            CIDCO sets the validity windows here. Saved to the backend and used by the API for every
+            token issued afterwards (validate, refresh and the button below).
+          </p>
+          <div className="mt-3 flex flex-wrap items-end gap-3">
+            <div>
+              <label htmlFor={`atl-${handshakeId}`} className="mb-1 block text-xs font-medium text-slate-600">Access token (days)</label>
+              <input id={`atl-${handshakeId}`} type="number" min={1} value={accessTtl} onChange={(e) => setAccessTtl(e.target.value)}
+                className="w-28 rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label htmlFor={`rtl-${handshakeId}`} className="mb-1 block text-xs font-medium text-slate-600">Refresh token (days)</label>
+              <input id={`rtl-${handshakeId}`} type="number" min={1} value={refreshTtl} onChange={(e) => setRefreshTtl(e.target.value)}
+                className="w-28 rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+            </div>
+            <label className="flex items-center gap-1.5 pb-2 text-xs font-medium text-slate-600">
+              <input type="checkbox" checked={enforce} onChange={(e) => setEnforce(e.target.checked)} className="rounded border-slate-300" />
+              Enforce IP whitelist
+            </label>
+            <button type="submit" disabled={busy} className="ml-auto rounded-lg bg-cidco-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cidco-700 disabled:opacity-50">
+              Save policy
+            </button>
+          </div>
+        </form>
+
+        <div className="rounded-lg border border-slate-200 bg-white p-4">
+          <div className="flex items-start justify-between">
+            <div>
+              <h4 className="text-sm font-semibold text-slate-900">Whitelisted IP / device</h4>
+              <p className="mt-1 text-xs text-slate-500">Registered on the architect&rsquo;s first validate.</p>
+            </div>
+            <button onClick={resetWhitelist} disabled={busy}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+              Reset
+            </button>
+          </div>
+          <dl className="mt-3 space-y-1.5 text-xs">
+            <div className="flex justify-between gap-3">
+              <dt className="text-slate-500">IP address</dt>
+              <dd className="font-mono text-slate-800">{detail.whitelistedIp ?? <span className="text-slate-400">not registered</span>}</dd>
+            </div>
+            <div className="flex justify-between gap-3">
+              <dt className="text-slate-500">Device info</dt>
+              <dd className="max-w-[60%] truncate text-right text-slate-800" title={detail.deviceInfo ?? ''}>{detail.deviceInfo ?? '—'}</dd>
+            </div>
+            <div className="flex justify-between gap-3">
+              <dt className="text-slate-500">Whitelisted at</dt>
+              <dd className="text-slate-800">{fmt(detail.whitelistedAt)}</dd>
+            </div>
+            <div className="flex justify-between gap-3">
+              <dt className="text-slate-500">Enforcement</dt>
+              <dd className={detail.enforceWhitelist ? 'font-semibold text-emerald-700' : 'text-amber-700'}>
+                {detail.enforceWhitelist ? 'ON' : 'OFF'}
+              </dd>
+            </div>
+          </dl>
+        </div>
+      </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        {/* Generate token */}
+        {/* Generate token pair */}
         <form onSubmit={generateToken} className="rounded-lg border border-slate-200 bg-white p-4">
-          <h4 className="text-sm font-semibold text-slate-900">Generate API token</h4>
+          <h4 className="text-sm font-semibold text-slate-900">Generate access + refresh tokens</h4>
           <p className="mt-1 text-xs text-slate-500">
-            Requires the handshake to be ESTABLISHED. Paste the clientSecret you issued to mint a
-            token (default 7-day expiry).
+            Requires the handshake to be ESTABLISHED. Paste the clientSecret you issued. Uses the
+            policy above ({accessTtl}d / {refreshTtl}d) and revokes any earlier pair.
           </p>
           <div className="mt-3 space-y-2">
             <input value={clientId} readOnly className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-600" />
@@ -285,30 +438,21 @@ function HandshakeDetail({ handshakeId, clientId, onChanged }: { handshakeId: st
               required
               className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-cidco-500 focus:ring-1 focus:ring-cidco-500"
             />
-            <div className="flex items-center gap-2">
-              <input
-                type="number"
-                min={1}
-                value={tokenDays}
-                onChange={(e) => setTokenDays(e.target.value)}
-                className="w-24 rounded-lg border border-slate-300 px-3 py-2 text-sm"
-              />
-              <span className="text-xs text-slate-500">days</span>
-              <button
-                type="submit"
-                disabled={busy || detail.status !== 'ESTABLISHED'}
-                className="ml-auto rounded-lg bg-cidco-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cidco-700 disabled:opacity-50"
-              >
-                Generate
-              </button>
-            </div>
+            <button
+              type="submit"
+              disabled={busy || detail.status !== 'ESTABLISHED'}
+              className="w-full rounded-lg bg-cidco-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cidco-700 disabled:opacity-50"
+            >
+              Generate token pair
+            </button>
             {detail.status !== 'ESTABLISHED' && (
               <p className="text-xs text-amber-700">Waiting for the architect to validate — status is {detail.status}.</p>
             )}
           </div>
-          {freshToken && (
-            <div className="mt-3">
-              <CopyField label="API token (shown once)" value={freshToken} />
+          {freshPair && (
+            <div className="mt-3 space-y-2">
+              <CopyField label="Access token (shown once)" value={freshPair.access} />
+              <CopyField label="Refresh token (shown once)" value={freshPair.refresh} />
             </div>
           )}
         </form>
@@ -322,14 +466,44 @@ function HandshakeDetail({ handshakeId, clientId, onChanged }: { handshakeId: st
             </button>
           </div>
           <p className="mt-1 text-xs text-slate-500">Validated {fmt(detail.architectValidatedAt)} · established {fmt(detail.establishedAt)}</p>
-          <div className="mt-2 space-y-1">
+
+          {/* Edit the live pair's expiry dates */}
+          <form onSubmit={saveExpiry} className="mt-3 rounded-lg bg-slate-50 p-3">
+            <p className="text-xs font-semibold text-slate-700">Set expiry on the live token pair</p>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              <div>
+                <label htmlFor={`ae-${handshakeId}`} className="mb-1 block text-[11px] text-slate-500">Access expires</label>
+                <input id={`ae-${handshakeId}`} type="datetime-local" value={accessExp} onChange={(e) => setAccessExp(e.target.value)}
+                  className="w-full rounded border border-slate-300 px-2 py-1.5 text-xs" />
+              </div>
+              <div>
+                <label htmlFor={`re-${handshakeId}`} className="mb-1 block text-[11px] text-slate-500">Refresh expires</label>
+                <input id={`re-${handshakeId}`} type="datetime-local" value={refreshExp} onChange={(e) => setRefreshExp(e.target.value)}
+                  className="w-full rounded border border-slate-300 px-2 py-1.5 text-xs" />
+              </div>
+            </div>
+            <button type="submit" disabled={busy}
+              className="mt-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50">
+              Update expiry
+            </button>
+          </form>
+
+          <div className="mt-3 space-y-1">
             {detail.tokens.length === 0 && <p className="text-xs text-slate-400">No tokens yet.</p>}
             {detail.tokens.map((t) => (
-              <div key={t.id} className="flex items-center justify-between rounded border border-slate-100 px-2 py-1 text-xs">
-                <span className="font-mono text-slate-700">{t.prefix}…</span>
-                <span className={t.active ? 'text-emerald-700' : 'text-slate-400'}>
-                  {t.revokedAt ? 'revoked' : t.active ? `active · exp ${fmt(t.expiresAt)}` : `expired ${fmt(t.expiresAt)}`}
-                </span>
+              <div key={t.id} className="rounded border border-slate-100 px-2 py-1.5 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="font-mono text-slate-700">{t.prefix}…</span>
+                  <span className={t.active ? 'text-emerald-700' : 'text-slate-400'}>
+                    {t.revokedAt ? 'revoked' : t.active ? `active · exp ${fmt(t.expiresAt)}` : `expired ${fmt(t.expiresAt)}`}
+                  </span>
+                </div>
+                <div className="mt-0.5 flex items-center justify-between text-[11px]">
+                  <span className="font-mono text-slate-500">{t.refreshPrefix ? `${t.refreshPrefix}…` : 'no refresh token'}</span>
+                  <span className={t.refreshExpired ? 'text-red-600' : 'text-slate-500'}>
+                    {t.refreshExpiresAt ? `refresh ${t.refreshExpired ? 'EXPIRED' : 'exp'} ${fmt(t.refreshExpiresAt)}` : '—'}
+                  </span>
+                </div>
               </div>
             ))}
           </div>

@@ -29,20 +29,37 @@ manages it from the dashboard**; the **architect drives it from Postman** — th
 
 **The flow**
 
+*CASE 1 — first-time setup*
 1. **CIDCO issues a credential** — the officer issues `{ clientId, clientSecret, expiryDate }` for an
    architect from the *Architect Handshakes* tab. The secret is shown once.
-2. **Architect validates** — `POST /api/architect/validate` with the credential. Correct → **200 OK**
-   and the two-way channel is `ESTABLISHED`; wrong/expired → **504** (CIDCO's "not validated" code).
-3. **CIDCO generates a token** — for the established handshake, using the `clientId` + `clientSecret`.
-   Tokens expire, **7 days by default**.
-4. **Architect sends data** — `POST /api/architect/data` with `Authorization: Bearer <token>`. The
-   reading is written to PostgreSQL automatically.
-5. **Renewal** — the architect raises `POST /api/architect/token-requests`; the officer approves it
-   from the *Token Requests* tab and a fresh 7-day token is issued.
-6. **Logs** — every step is recorded with a timestamp and shown to the officer as a chronological
-   **activity timeline** — on each handshake's *Manage* panel and in the *Communication Logs* tab
-   (filter by handshake, Timeline/Table views, live refresh; `GET /api/admin/comm-logs`) — and to
-   the architect (`GET /api/architect/logs`).
+2. **Architect validates** — `POST /api/architect/validate` with the credentials **plus their IP
+   address and device info**. On success CIDCO **whitelists that IP/device**, marks the handshake
+   `ESTABLISHED`, and returns **both tokens**: an access token (7 days) and a refresh token (30 days).
+   Wrong/expired/non-whitelisted → **504**.
+3. **Architect sends AQI data** — `POST /api/architect/data` with `Authorization: Bearer <accessToken>`,
+   automated every 3 hours. Written to PostgreSQL automatically.
+
+*CASE 2 — access token expires*
+
+The data call answers **503** with `ACCESS_EXPIRED`. The architect posts their refresh token to
+`POST /api/architect/refresh` and gets a **new access token**; the refresh token itself is unchanged,
+so an unattended feed can never lock itself out. Sending resumes.
+
+*CASE 3 — refresh token expires*
+
+Once the refresh window closes the access token dies with it, **whatever its own expiry says**. The
+data call answers **503** with `BOTH_EXPIRED` and tells the architect to re-authenticate with their
+user id and password — i.e. repeat CASE 1.
+
+*Token policy — set from the dashboard*
+
+Each handshake carries its own `accessTokenTtlDays` / `refreshTokenTtlDays` (default 7 / 30) and an
+`enforceWhitelist` flag, all editable from the *Architect Handshakes → Manage* panel. Changes are
+saved to the backend and used by the API for every token issued afterwards. The officer can also set
+an explicit expiry date on the live pair, re-issue a pair, or reset the IP/device whitelist.
+
+*Logs* — every step is timestamped in the communication log, shown to the officer as an activity
+timeline and to the architect via `GET /api/architect/logs`.
 
 **Admin endpoints** (CIDCO officer session):
 
@@ -51,7 +68,10 @@ manages it from the dashboard**; the **architect drives it from Postman** — th
 | `POST` | `/api/admin/handshakes` | Issue credentials for an architect (returns the credential JSON once) |
 | `GET` | `/api/admin/handshakes` | List handshakes and their state |
 | `GET` | `/api/admin/handshakes/:id` | Handshake detail: tokens, requests, comm log |
-| `POST` | `/api/admin/handshakes/:id/tokens` | Generate an API token (needs `clientId` + `clientSecret`, default 7-day expiry) |
+| `POST` | `/api/admin/handshakes/:id/tokens` | Generate an access + refresh **pair** (needs `clientId` + `clientSecret`); revokes the previous pair |
+| `PATCH` | `/api/admin/handshakes/:id/policy` | Set access/refresh expiry windows and whitelist enforcement |
+| `PATCH` | `/api/admin/handshakes/:id/token-expiry` | Set explicit expiry dates on the live token pair |
+| `DELETE` | `/api/admin/handshakes/:id/whitelist` | Clear the registered IP/device |
 | `POST` | `/api/admin/handshakes/:id/revoke` | Revoke the handshake and all its tokens |
 | `GET` | `/api/admin/token-requests` | List renewal requests |
 | `POST` | `/api/admin/token-requests/:id/approve` | Approve a request, issue a fresh token |
@@ -61,9 +81,10 @@ manages it from the dashboard**; the **architect drives it from Postman** — th
 
 | Method | Path | Auth | Description |
 | ------ | ---- | ---- | ----------- |
-| `POST` | `/api/architect/validate` | clientId + secret | Validate → 200 established / 504 rejected |
-| `POST` | `/api/architect/data` | Bearer token | Send an AQI reading (JSON or multipart) → stored |
-| `POST` | `/api/architect/token-requests` | clientId + secret | Raise a token renewal request |
+| `POST` | `/api/architect/validate` | clientId + secret (+ ip/device) | Validate → 200 with **both tokens** / 504 rejected |
+| `POST` | `/api/architect/data` | Bearer access token | Send an AQI reading → stored. 503 when a token has expired |
+| `POST` | `/api/architect/refresh` | refresh token | CASE 2 — get a new access token. 503 `BOTH_EXPIRED` when the refresh token has lapsed |
+| `POST` | `/api/architect/token-requests` | clientId + secret | Optional manual renewal ticket for an officer to fulfil |
 | `GET` | `/api/architect/status` | token or clientId+secret headers | Handshake / token status |
 | `GET` | `/api/architect/logs` | token or clientId+secret headers | Timestamped exchange log |
 
@@ -71,8 +92,9 @@ Full architect guide: **`/docs/architect`** (in-app) and **`docs/ARCHITECT_API.m
 collection: **`postman/CIDCO-Architect-Handshake.postman_collection.json`** — it chains the whole
 flow and saves the clientId, secret and token into collection variables automatically.
 
-> **Note on 504.** The spec calls for `504` when handshake validation fails (normally you'd use 401).
-> This convention is honoured deliberately and documented for the architect.
+> **Status-code conventions.** `504` means *handshake validation failed* and `503` means *a token has
+> expired* (`ACCESS_EXPIRED` → refresh; `BOTH_EXPIRED` → re-validate). Both follow the CIDCO protocol
+> rather than the usual `401`, and are documented for the architect.
 
 ---
 

@@ -3,14 +3,7 @@ import { prisma } from '@/lib/prisma';
 import { fail, handleError, ok } from '@/lib/api';
 import { requireCidco } from '@/lib/guards';
 import { generateTokenSchema } from '@/lib/validation';
-import {
-  DEFAULT_TOKEN_TTL_DAYS,
-  addDays,
-  clientIp,
-  generateToken,
-  logComm,
-  verifyCredentials,
-} from '@/lib/handshake';
+import { clientIp, issueTokenPair, logComm, verifyCredentials } from '@/lib/handshake';
 
 export const dynamic = 'force-dynamic';
 
@@ -42,12 +35,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return fail('Handshake must be ESTABLISHED before a token can be generated. The architect must validate first.', 409);
     }
 
-    const ttlDays = body.expiresInDays ?? DEFAULT_TOKEN_TTL_DAYS;
-    const expiresAt = addDays(new Date(), ttlDays);
-    const { token, tokenHash, prefix } = generateToken();
+    // Always issue a full pair so a dashboard-issued token can be refreshed
+    // exactly like an auto-issued one. Any earlier pair is revoked.
+    const accessTtl = body.expiresInDays ?? handshake.accessTokenTtlDays;
+    const refreshTtl = body.refreshExpiresInDays ?? handshake.refreshTokenTtlDays;
 
-    const record = await prisma.integrationToken.create({
-      data: { handshakeId: handshake.id, tokenHash, prefix, expiresAt, createdById: guard.user.id },
+    const issued = await issueTokenPair({
+      handshakeId: handshake.id,
+      accessTtlDays: accessTtl,
+      refreshTtlDays: refreshTtl,
+      createdById: guard.user.id,
     });
 
     await logComm({
@@ -55,20 +52,24 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       direction: 'ADMIN_TO_ARCHITECT',
       event: 'TOKEN_GENERATED',
       statusCode: 201,
-      detail: `Token ${prefix}… issued, valid ${ttlDays} day(s) until ${expiresAt.toISOString()}`,
+      detail: `Access token ${issued.record.prefix}… (${accessTtl}d) and refresh token (${refreshTtl}d) issued from the dashboard; previous tokens revoked`,
       ip: clientIp(req),
     });
 
     return ok(
       {
-        message: 'API token generated. Give it to the architect — it is shown only once.',
+        message: 'Access and refresh tokens generated. Give both to the architect — shown only once.',
         token: {
-          id: record.id,
-          token, // plaintext, once
-          prefix,
-          expiresAt,
-          expiresInDays: ttlDays,
-          usage: 'Authorization: Bearer <token> to POST /api/architect/data',
+          id: issued.record.id,
+          token: issued.accessToken, // plaintext, once
+          accessToken: issued.accessToken,
+          refreshToken: issued.refreshToken,
+          prefix: issued.record.prefix,
+          expiresAt: issued.accessExpiresAt,
+          refreshExpiresAt: issued.refreshExpiresAt,
+          expiresInDays: accessTtl,
+          refreshExpiresInDays: refreshTtl,
+          usage: 'Authorization: Bearer <accessToken> to POST /api/architect/data',
         },
       },
       201,

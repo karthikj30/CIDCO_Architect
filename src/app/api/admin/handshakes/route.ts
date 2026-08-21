@@ -32,7 +32,11 @@ export async function GET(req: NextRequest) {
     const now = Date.now();
     const rows = handshakes.map((h) => {
       const activeToken = h.tokens.find(
-        (t) => !t.revokedAt && t.expiresAt.getTime() > now,
+        (t) =>
+          !t.revokedAt &&
+          t.expiresAt.getTime() > now &&
+          !!t.refreshExpiresAt &&
+          t.refreshExpiresAt.getTime() > now,
       );
       return {
         id: h.id,
@@ -42,10 +46,19 @@ export async function GET(req: NextRequest) {
         credentialExpiresAt: h.credentialExpiresAt,
         establishedAt: h.establishedAt,
         architect: h.architect,
+        whitelistedIp: h.whitelistedIp,
+        enforceWhitelist: h.enforceWhitelist,
+        accessTokenTtlDays: h.accessTokenTtlDays,
+        refreshTokenTtlDays: h.refreshTokenTtlDays,
         tokenCount: h.tokens.length,
         tokenRequestCount: h._count.tokenRequests,
         activeToken: activeToken
-          ? { id: activeToken.id, prefix: activeToken.prefix, expiresAt: activeToken.expiresAt }
+          ? {
+              id: activeToken.id,
+              prefix: activeToken.prefix,
+              expiresAt: activeToken.expiresAt,
+              refreshExpiresAt: activeToken.refreshExpiresAt,
+            }
           : null,
         createdAt: h.createdAt,
       };
