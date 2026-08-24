@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import ArchitectSignIn, { type Architect } from './ArchitectSignIn';
 import ConnectionPanel from './ConnectionPanel';
-import SendDataPanel from './SendDataPanel';
+import AutomatePanel from './AutomatePanel';
+import MessagesPanel from './MessagesPanel';
 import MyReadingsPanel from './MyReadingsPanel';
 import ActivityPanel from './ActivityPanel';
 import { useTokens } from './useTokens';
@@ -26,6 +27,18 @@ export type MeData = {
       id: string; direction: string; event: string; statusCode: number | null;
       detail: string | null; ip: string | null; createdAt: string;
     }>;
+    deliveries: Array<{
+      id: string; kind: string; message: string;
+      accessToken: string | null; refreshToken: string | null;
+      accessPrefix: string | null; refreshPrefix: string | null;
+      accessExpiresAt: string | null; refreshExpiresAt: string | null;
+      acknowledgedAt: string | null; createdAt: string;
+    }>;
+    validationRequests: Array<{
+      id: string; status: string; presentedIp: string | null; deviceInfo: string | null;
+      reviewNote: string | null; createdAt: string; reviewedAt: string | null;
+    }>;
+    tokenRequests: Array<{ id: string; status: string; kind: string; reason: string | null; requestedAt: string; resolvedAt: string | null }>;
   }>;
   readingCount: number;
   recentReadings: Array<{
@@ -35,7 +48,7 @@ export type MeData = {
   }>;
 };
 
-type Tab = 'connection' | 'send' | 'readings' | 'activity';
+type Tab = 'connection' | 'messages' | 'send' | 'readings' | 'activity';
 
 function NavButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
@@ -99,6 +112,11 @@ export default function ArchitectWorkspace() {
   }
 
   const live = me.handshakes.find((h) => h.status === 'ESTABLISHED');
+  // Deliveries still carrying plaintext tokens the architect hasn't saved yet.
+  const unreadTokens = me.handshakes.reduce(
+    (n, h) => n + h.deliveries.filter((d) => !d.acknowledgedAt && (d.accessToken || d.refreshToken)).length,
+    0,
+  );
 
   return (
     <div className="flex h-[calc(100vh-69px)] w-full overflow-hidden bg-slate-50">
@@ -110,6 +128,13 @@ export default function ArchitectWorkspace() {
           <NavButton active={tab === 'connection'} onClick={() => setTab('connection')}>
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"></path><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"></path></svg>
             Connection
+          </NavButton>
+          <NavButton active={tab === 'messages'} onClick={() => setTab('messages')}>
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
+            Messages
+            {unreadTokens > 0 && (
+              <span className="ml-auto rounded-full bg-emerald-600 px-1.5 py-0.5 text-[10px] font-bold text-white">{unreadTokens}</span>
+            )}
           </NavButton>
           <NavButton active={tab === 'send'} onClick={() => setTab('send')}>
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
@@ -151,9 +176,17 @@ export default function ArchitectWorkspace() {
 
       <main className="flex-1 overflow-y-auto p-8">
         {tab === 'connection' && (
-          <ConnectionPanel me={me} tokens={tokens} saveTokens={save} clearTokens={clear} reload={reload} />
+          <ConnectionPanel
+            me={me}
+            tokens={tokens}
+            saveTokens={save}
+            clearTokens={clear}
+            reload={reload}
+            goToMessages={() => setTab('messages')}
+          />
         )}
-        {tab === 'send' && <SendDataPanel tokens={tokens} reload={reload} />}
+        {tab === 'messages' && <MessagesPanel me={me} saveTokens={save} reload={reload} />}
+        {tab === 'send' && <AutomatePanel tokens={tokens} saveTokens={save} reload={reload} />}
         {tab === 'readings' && <MyReadingsPanel me={me} />}
         {tab === 'activity' && <ActivityPanel me={me} />}
       </main>

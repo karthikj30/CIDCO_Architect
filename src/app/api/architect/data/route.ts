@@ -32,6 +32,13 @@ export async function POST(req: NextRequest) {
         const expiry = check.failure === 'ACCESS_EXPIRED' || check.failure === 'BOTH_EXPIRED';
         const status = expiry ? 503 : check.failure === 'IP_NOT_WHITELISTED' ? 403 : 401;
 
+        // Hand the reading straight back so the architect's system can resend
+        // it once the token is sorted out — nothing was stored.
+        let returnedData: unknown = null;
+        if ((req.headers.get('content-type') || '').includes('application/json')) {
+          returnedData = await req.json().catch(() => null);
+        }
+
         await logComm({
           handshakeId: await handshakeIdForRequest(req),
           direction: 'ADMIN_TO_ARCHITECT',
@@ -41,14 +48,23 @@ export async function POST(req: NextRequest) {
           ip,
         });
 
-        return fail(check.reason, status, {
+        const message = expiry
+          ? check.failure === 'ACCESS_EXPIRED'
+            ? 'Data has not been sent — your access token has expired. Please update your access token and send again.'
+            : 'Data has not been sent — your access token and refresh token have both expired. Please validate again with your user id and password to get new tokens.'
+          : check.reason;
+
+        return fail(message, status, {
           reason: check.failure,
+          stored: false,
           action:
             check.failure === 'ACCESS_EXPIRED'
-              ? 'POST /api/architect/refresh with your refresh token'
+              ? 'Raise a token request with your refresh token (POST /api/architect/token-requests), then update the new access token.'
               : check.failure === 'BOTH_EXPIRED'
                 ? 'POST /api/architect/validate with your clientId and clientSecret'
                 : undefined,
+          // The unsent reading, returned verbatim.
+          returnedData,
         });
       }
       const { token, handshake } = check;

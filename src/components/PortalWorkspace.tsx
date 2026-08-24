@@ -7,13 +7,14 @@ import AdminSignIn from './admin/AdminSignIn';
 import HandshakesPanel from './admin/HandshakesPanel';
 import TokenRequestsPanel from './admin/TokenRequestsPanel';
 import CommLogsPanel from './admin/CommLogsPanel';
+import ValidationRequestsPanel from './admin/ValidationRequestsPanel';
 import DataTablePanel from './admin/DataTablePanel';
 import type { ApiRequestLog } from '@prisma/client';
 
-type Tab = 'tester' | 'logs' | 'data' | 'handshakes' | 'requests' | 'comm';
+type Tab = 'tester' | 'logs' | 'data' | 'handshakes' | 'validations' | 'requests' | 'comm';
 type AdminUser = { id: string; name: string; email: string; role: string };
 
-const ADMIN_TABS: Tab[] = ['data', 'handshakes', 'requests', 'comm'];
+const ADMIN_TABS: Tab[] = ['data', 'handshakes', 'validations', 'requests', 'comm'];
 
 function NavButton({
   active,
@@ -86,6 +87,10 @@ export default function PortalWorkspace({ initialLogs }: { initialLogs: ApiReque
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 17a4 4 0 0 1-8 0V7a4 4 0 0 1 8 0"></path><path d="M13 7a4 4 0 0 1 8 0v10a4 4 0 0 1-8 0"></path></svg>
             Architect Handshakes
           </NavButton>
+          <NavButton active={activeTab === 'validations'} onClick={() => setActiveTab('validations')}>
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 12l2 2 4-4"></path><path d="M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9c1.66 0 3.22.45 4.56 1.24"></path></svg>
+            Validation Requests
+          </NavButton>
           <NavButton active={activeTab === 'requests'} onClick={() => setActiveTab('requests')}>
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg>
             Token Requests
@@ -131,6 +136,7 @@ export default function PortalWorkspace({ initialLogs }: { initialLogs: ApiReque
             {activeTab === 'logs' && <ApiLogsTable logs={initialLogs} />}
             {activeTab === 'data' && <DataTablePanel />}
             {activeTab === 'handshakes' && <HandshakesPanel />}
+            {activeTab === 'validations' && <ValidationRequestsPanel />}
             {activeTab === 'requests' && <TokenRequestsPanel />}
             {activeTab === 'comm' && <CommLogsPanel />}
           </>

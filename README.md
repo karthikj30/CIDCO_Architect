@@ -14,71 +14,67 @@ Reports reach CIDCO through **two channels**:
 
 Both channels land in the same table and are reviewed by CIDCO officers in the same workflow.
 
-The web UI is a **single-screen CIDCO admin portal** at `/` with two groups of tabs:
-
-- **Tools** — an in-browser API Tester and a live API request log.
-- **CIDCO Admin** (officer sign-in) — Architect Handshakes, Token Requests, and Communication Logs
-  for the handshake integration described next.
+The web UI is **two portals** — the CIDCO admin portal at `/` and the architect portal at
+`/architect` — described under [Pages](#pages).
 
 ---
 
 ## Architect ⇄ CIDCO handshake & token integration
 
-A mutual-validation, token-based channel between an architect's system and CIDCO. The **admin
-manages it from the dashboard**; the **architect drives it from Postman** — there is no architect UI.
+A CIDCO-approved, token-based channel between an architect and CIDCO. Both sides have their own
+portal: CIDCO at `/`, the architect at `/architect`. Every protocol call is also a plain HTTP API,
+so an architect's station (or Postman) can drive the same flow without a browser.
 
 **The flow**
 
 *CASE 1 — first-time setup*
-1. **CIDCO issues a credential** — the officer issues `{ clientId, clientSecret, expiryDate }` for an
-   architect from the *Architect Handshakes* tab. The secret is shown once.
-2. **Architect validates** — `POST /api/architect/validate` with the credentials **plus their IP
-   address and device info**. On success CIDCO **whitelists that IP/device**, marks the handshake
-   `ESTABLISHED`, and returns **both tokens**: an access token (7 days) and a refresh token (30 days).
-   Wrong/expired/non-whitelisted → **504**.
-3. **Architect sends AQI data** — `POST /api/architect/data` with `Authorization: Bearer <accessToken>`,
-   automated every 3 hours. Written to PostgreSQL automatically.
+1. **CIDCO issues a user id + password** (`clientId` / `clientSecret`) from *Architect Handshakes*
+   and sends it to the architect **by email or message**, off-platform.
+2. **The architect hits the CIDCO API manually** — `POST /api/architect/validate` with those
+   credentials plus their **IP address and device info**. No tokens are issued yet: the attempt is
+   queued and answers **202 AWAITING_APPROVAL**.
+3. **CIDCO reviews it** in the *Validation Requests* tab — architect identity, IP and device — and
+   clicks **Validate & issue tokens** (or Reject).
+4. On approval CIDCO whitelists the IP/device, generates the **access token (7 d)** and **refresh
+   token (30 d)**, and **delivers both to the architect's dashboard** as a message: *"Your API
+   request has been validated by CIDCO. Here are your access token and refresh token — keep them
+   safely."*
+5. The architect **saves the access token on their dashboard and clicks Automate** — the reading is
+   then posted continuously (default every 3 h) with the access token as the header and the data as
+   the body. CIDCO validates the token on every hit before storing.
 
 *CASE 2 — access token expires*
 
-The data call answers **503** with `ACCESS_EXPIRED`. The architect posts their refresh token to
-`POST /api/architect/refresh` and gets a **new access token**; the refresh token itself is unchanged,
-so an unattended feed can never lock itself out. Sending resumes.
+CIDCO refuses the send with **503**, **returns the unsent reading in the response**, and says
+*"Data has not been sent — your access token has expired."* The architect raises a request on their
+dashboard with their **refresh token**; it pops up in CIDCO's *Token Requests* tab, an officer
+verifies the refresh token and issues a **new access token**, which is delivered as a dashboard
+message. The architect pastes it in and restarts Automate. The refresh token is unchanged.
 
 *CASE 3 — refresh token expires*
 
-Once the refresh window closes the access token dies with it, **whatever its own expiry says**. The
-data call answers **503** with `BOTH_EXPIRED` and tells the architect to re-authenticate with their
-user id and password — i.e. repeat CASE 1.
+Once the refresh window closes the access token dies with it, whatever its own expiry says. The send
+is refused with **503** and the data returned, telling the architect to authenticate again with the
+user id and password — i.e. back to CASE 1 step 2, and CIDCO issues a **fresh pair**.
 
 *Token policy — set from the dashboard*
 
 Each handshake carries its own `accessTokenTtlDays` / `refreshTokenTtlDays` (default 7 / 30) and an
-`enforceWhitelist` flag, all editable from the *Architect Handshakes → Manage* panel. Changes are
-saved to the backend and used by the API for every token issued afterwards. The officer can also set
-an explicit expiry date on the live pair or reset the IP/device whitelist.
-
-*Choosing which token to generate*
-
-The Manage panel's **Generate tokens** card has a **Both / Access only / Refresh only** selector:
-
-| Choice | Effect |
-| ------ | ------ |
-| **Both** | New access **and** refresh token. Revokes the previous pair — hand the architect both. |
-| **Access only** | New access token; the architect's current **refresh token keeps working**. |
-| **Refresh only** | New refresh token; the architect's current **access token keeps working**, so a running 3-hourly feed is not interrupted. |
-
-Generated tokens are displayed in full with Copy buttons — individually and as one JSON block to send
-to the architect. Plaintext is shown **once**; afterwards only the prefix and expiry are visible.
+`enforceWhitelist` flag, all editable from *Architect Handshakes → Manage*. Changes apply to every
+token issued afterwards. The officer can also set explicit expiry dates on the live pair, choose
+which token to regenerate (**Both / Access only / Refresh only**), or reset the IP/device whitelist.
 
 *Logs* — every step is timestamped in the communication log, shown to the officer as an activity
-timeline and to the architect via `GET /api/architect/logs`.
+timeline and to the architect on their *Activity log* tab.
 
 **Admin endpoints** (CIDCO officer session):
 
 | Method | Path | Description |
 | ------ | ---- | ----------- |
 | `POST` | `/api/admin/handshakes` | Issue credentials for an architect (returns the credential JSON once) |
+| `GET` | `/api/admin/validation-requests` | The approval queue — architects awaiting validation |
+| `POST` | `/api/admin/validation-requests/:id/approve` | Validate the architect/IP/device, issue tokens, deliver them |
+| `POST` | `/api/admin/validation-requests/:id/reject` | Refuse, with a reason shown to the architect |
 | `GET` | `/api/admin/handshakes` | List handshakes and their state |
 | `GET` | `/api/admin/handshakes/:id` | Handshake detail: tokens, requests, comm log |
 | `POST` | `/api/admin/handshakes/:id/tokens` | Generate tokens (needs `clientId` + `clientSecret`). `mode`: `both` (default, new pair — revokes the previous one), `access` (new access token only), `refresh` (new refresh token only) |
@@ -94,10 +90,12 @@ timeline and to the architect via `GET /api/architect/logs`.
 
 | Method | Path | Auth | Description |
 | ------ | ---- | ---- | ----------- |
-| `POST` | `/api/architect/validate` | clientId + secret (+ ip/device) | Validate → 200 with **both tokens** / 504 rejected |
-| `POST` | `/api/architect/data` | Bearer access token | Send an AQI reading → stored. 503 when a token has expired |
-| `POST` | `/api/architect/refresh` | refresh token | CASE 2 — get a new access token. 503 `BOTH_EXPIRED` when the refresh token has lapsed |
-| `POST` | `/api/architect/token-requests` | clientId + secret | Optional manual renewal ticket for an officer to fulfil |
+| `POST` | `/api/architect/validate` | clientId + secret (+ ip/device) | Submit for CIDCO approval → **202 AWAITING_APPROVAL** / 504 rejected. Tokens arrive on the dashboard after approval |
+| `POST` | `/api/architect/data` | Bearer access token | Send an AQI reading → stored. **503 + the reading returned** when a token has expired |
+| `POST` | `/api/architect/token-requests` | refresh token | CASE 2 — ask CIDCO for a new access token → **202**, delivered after approval |
+| `GET` | `/api/architect/me` | architect session | Dashboard data: handshakes, token deliveries, readings, logs |
+| `POST` | `/api/architect/deliveries/:id/ack` | architect session | Confirm the tokens were saved; plaintext is wiped |
+| `POST` | `/api/architect/refresh` | refresh token | Direct renewal for a machine client (bypasses the approval queue) |
 | `GET` | `/api/architect/status` | token or clientId+secret headers | Handshake / token status |
 | `GET` | `/api/architect/logs` | token or clientId+secret headers | Timestamped exchange log |
 
@@ -194,8 +192,8 @@ There are **two portals**, each with its own sign-in:
 
 | Route              | Portal | Purpose                                                        |
 | ------------------ | ------ | -------------------------------------------------------------- |
-| `/`                | CIDCO admin | API Tester, API Logs, AQI Data, Architect Handshakes, Token Requests, Communication Logs |
-| `/architect`       | Architect | Connection (validate / renew tokens), Send AQI data, My readings, Activity log |
+| `/`                | CIDCO admin | API Tester, API Logs, AQI Data, Architect Handshakes, **Validation Requests**, Token Requests, Communication Logs |
+| `/architect`       | Architect | Connection (hit the API, request tokens), Messages (tokens from CIDCO), Send AQI data (**Automate**), My readings, Activity log |
 | `/docs/architect`  | — | Architect integration guide (validation, tokens, sending data)  |
 
 Seeded logins: CIDCO officer `officer@cidco.example` / `Password123`; architect

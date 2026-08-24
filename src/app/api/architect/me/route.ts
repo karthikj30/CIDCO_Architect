@@ -26,6 +26,9 @@ export async function GET(req: NextRequest) {
       include: {
         tokens: { orderBy: { createdAt: 'desc' }, take: 5 },
         commLogs: { orderBy: { createdAt: 'desc' }, take: 30 },
+        deliveries: { orderBy: { createdAt: 'desc' }, take: 10 },
+        validationRequests: { orderBy: { createdAt: 'desc' }, take: 5 },
+        tokenRequests: { orderBy: { requestedAt: 'desc' }, take: 5 },
         _count: { select: { tokenRequests: true } },
       },
     });
@@ -77,6 +80,38 @@ export async function GET(req: NextRequest) {
             }
           : null,
         commLogs: h.commLogs,
+        // Messages CIDCO put on this architect's dashboard — the plaintext
+        // tokens are present only until the architect acknowledges them.
+        deliveries: h.deliveries.map((d) => ({
+          id: d.id,
+          kind: d.kind,
+          message: d.message,
+          accessToken: d.accessToken,
+          refreshToken: d.refreshToken,
+          accessPrefix: d.accessPrefix,
+          refreshPrefix: d.refreshPrefix,
+          accessExpiresAt: d.accessExpiresAt,
+          refreshExpiresAt: d.refreshExpiresAt,
+          acknowledgedAt: d.acknowledgedAt,
+          createdAt: d.createdAt,
+        })),
+        validationRequests: h.validationRequests.map((v) => ({
+          id: v.id,
+          status: v.status,
+          presentedIp: v.presentedIp,
+          deviceInfo: v.deviceInfo,
+          reviewNote: v.reviewNote,
+          createdAt: v.createdAt,
+          reviewedAt: v.reviewedAt,
+        })),
+        tokenRequests: h.tokenRequests.map((t) => ({
+          id: t.id,
+          status: t.status,
+          kind: t.kind,
+          reason: t.reason,
+          requestedAt: t.requestedAt,
+          resolvedAt: t.resolvedAt,
+        })),
       };
     });
 

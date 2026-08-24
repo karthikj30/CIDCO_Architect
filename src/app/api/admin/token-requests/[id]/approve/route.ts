@@ -3,21 +3,30 @@ import { prisma } from '@/lib/prisma';
 import { fail, handleError, ok } from '@/lib/api';
 import { requireCidco } from '@/lib/guards';
 import { approveRequestSchema } from '@/lib/validation';
-import { clientIp, issueTokenPair, logComm } from '@/lib/handshake';
+import {
+  addDays,
+  clientIp,
+  deliverTokens,
+  generateToken,
+  issueTokenPair,
+  logComm,
+} from '@/lib/handshake';
 
 export const dynamic = 'force-dynamic';
 
 /**
  * POST /api/admin/token-requests/:id/approve
  *
- * The admin fulfils an architect's renewal request by minting a fresh token
- * (default 7-day expiry) and marking the request FULFILLED.
+ * The officer verifies the refresh token the architect presented and issues a
+ * new access token, delivered to the architect's dashboard. The refresh token
+ * itself is left alone until its own window closes.
  */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const guard = await requireCidco(req);
     if ('error' in guard) return guard.error;
     const { id } = await params;
+    const ip = clientIp(req);
 
     const body = approveRequestSchema.parse(await req.json().catch(() => ({})));
 
@@ -32,52 +41,111 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     }
 
     const accessTtl = body.expiresInDays ?? request.handshake.accessTokenTtlDays;
-    const refreshTtl = request.handshake.refreshTokenTtlDays;
+    const now = new Date();
 
+    // --- Verify the refresh token the architect presented ---------------------
+    // The request stores its hash, so approval proves the architect really held
+    // a live refresh token for this handshake.
+    const live = request.refreshTokenHash
+      ? await prisma.integrationToken.findUnique({ where: { refreshTokenHash: request.refreshTokenHash } })
+      : await prisma.integrationToken.findFirst({
+          where: { handshakeId: request.handshakeId, revokedAt: null },
+          orderBy: { createdAt: 'desc' },
+        });
+
+    if (!live || live.handshakeId !== request.handshakeId) {
+      return fail('The refresh token on this request no longer matches a token for this handshake', 409);
+    }
+    if (live.revokedAt) return fail('That token pair has been revoked', 409);
+
+    const refreshDead = !live.refreshExpiresAt || live.refreshExpiresAt.getTime() < now.getTime();
+
+    // Refresh still good → new access token only (the architect keeps theirs).
+    if (!refreshDead) {
+      const access = generateToken();
+      const updated = await prisma.integrationToken.update({
+        where: { id: live.id },
+        data: { tokenHash: access.tokenHash, prefix: access.prefix, expiresAt: addDays(now, accessTtl) },
+      });
+
+      await prisma.tokenRequest.update({
+        where: { id: request.id },
+        data: { status: 'FULFILLED', resolvedAt: now, resolvedById: guard.user.id, issuedTokenId: updated.id },
+      });
+
+      await deliverTokens({
+        handshakeId: request.handshakeId,
+        kind: 'ACCESS_RENEWAL',
+        message:
+          'CIDCO verified your refresh token. Here is your new access token — update it on your dashboard and restart automated sending. Your refresh token is unchanged.',
+        accessToken: access.token,
+        accessPrefix: access.prefix,
+        accessExpiresAt: updated.expiresAt,
+        refreshExpiresAt: updated.refreshExpiresAt,
+      });
+
+      await logComm({
+        handshakeId: request.handshakeId,
+        direction: 'ADMIN_TO_ARCHITECT',
+        event: 'TOKENS_DELIVERED',
+        statusCode: 200,
+        detail: `Refresh token verified; new access token ${access.prefix}… (${accessTtl}d) delivered to the architect's dashboard`,
+        ip,
+      });
+
+      return ok({
+        message: 'Approved. New access token delivered to the architect’s dashboard.',
+        kind: 'ACCESS_RENEWAL',
+        token: { accessPrefix: access.prefix, expiresAt: updated.expiresAt, expiresInDays: accessTtl },
+      });
+    }
+
+    // Refresh has lapsed → issue a whole new pair.
     const issued = await issueTokenPair({
       handshakeId: request.handshakeId,
       accessTtlDays: accessTtl,
-      refreshTtlDays: refreshTtl,
+      refreshTtlDays: request.handshake.refreshTokenTtlDays,
       createdById: guard.user.id,
       fromRequestId: request.id,
     });
 
     await prisma.tokenRequest.update({
       where: { id: request.id },
-      data: {
-        status: 'FULFILLED',
-        resolvedAt: new Date(),
-        resolvedById: guard.user.id,
-        issuedTokenId: issued.record.id,
-      },
+      data: { status: 'FULFILLED', resolvedAt: now, resolvedById: guard.user.id, issuedTokenId: issued.record.id },
+    });
+
+    await deliverTokens({
+      handshakeId: request.handshakeId,
+      kind: 'FULL_REISSUE',
+      message:
+        'Your refresh token had expired, so CIDCO has issued a new access token and a new refresh token. Keep both safely and update the access token on your dashboard.',
+      accessToken: issued.accessToken,
+      refreshToken: issued.refreshToken,
+      accessPrefix: issued.record.prefix,
+      refreshPrefix: issued.record.refreshTokenPrefix,
+      accessExpiresAt: issued.accessExpiresAt,
+      refreshExpiresAt: issued.refreshExpiresAt,
     });
 
     await logComm({
       handshakeId: request.handshakeId,
       direction: 'ADMIN_TO_ARCHITECT',
-      event: 'TOKEN_GENERATED',
-      statusCode: 201,
-      detail: `Renewal fulfilled: access ${issued.record.prefix}… (${accessTtl}d) + refresh (${refreshTtl}d)`,
-      ip: clientIp(req),
+      event: 'TOKENS_DELIVERED',
+      statusCode: 200,
+      detail: `Refresh had expired — new access + refresh pair delivered to the architect's dashboard`,
+      ip,
     });
 
-    return ok(
-      {
-        message: 'Token request approved. New access and refresh tokens issued (shown once).',
-        token: {
-          id: issued.record.id,
-          token: issued.accessToken,
-          accessToken: issued.accessToken,
-          refreshToken: issued.refreshToken,
-          prefix: issued.record.prefix,
-          expiresAt: issued.accessExpiresAt,
-          refreshExpiresAt: issued.refreshExpiresAt,
-          expiresInDays: accessTtl,
-          refreshExpiresInDays: refreshTtl,
-        },
+    return ok({
+      message: 'Approved. A new access and refresh token pair was delivered to the architect’s dashboard.',
+      kind: 'FULL_REISSUE',
+      token: {
+        accessPrefix: issued.record.prefix,
+        refreshPrefix: issued.record.refreshTokenPrefix,
+        expiresAt: issued.accessExpiresAt,
+        refreshExpiresAt: issued.refreshExpiresAt,
       },
-      201,
-    );
+    });
   } catch (error) {
     return handleError(error);
   }

@@ -36,10 +36,31 @@ enum AttachmentKind {
 // --- Architect ⇄ CIDCO handshake / token-based integration -----------------
 
 enum HandshakeStatus {
-  PENDING // admin issued credentials, architect has not validated yet
-  ESTABLISHED // architect validated and admin confirmed — 2-way channel open
+  PENDING // admin issued credentials, architect has not hit the API yet
+  AWAITING_APPROVAL // architect presented credentials + IP/device; CIDCO must review
+  ESTABLISHED // CIDCO approved — 2-way channel open, tokens issued
+  REJECTED // CIDCO refused the architect's validation attempt
   EXPIRED // the admin-set credential expiry date has passed
   REVOKED // admin manually revoked the handshake
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// What a token delivery on the architect's dashboard contains.
+enum DeliveryKind {
+  INITIAL_PAIR // first approval — access + refresh
+  ACCESS_RENEWAL // renewal approved from a refresh token — access only
+  FULL_REISSUE // refresh had expired — new access + refresh
+}
+
+/// What the architect is asking CIDCO for.
+enum TokenRequestKind {
+  ACCESS_RENEWAL // presented a refresh token, wants a new access token
+  FULL_REISSUE // both expired, wants a whole new pair
 }
 
 enum CommDirection {
@@ -235,10 +256,12 @@ model ArchitectHandshake {
   accessTokenTtlDays  Int             @default(7)
   refreshTokenTtlDays Int             @default(30)
 
-  architect     User               @relation("ArchitectHandshakes", fields: [architectId], references: [id], onDelete: Cascade)
-  tokens        IntegrationToken[]
-  tokenRequests TokenRequest[]
-  commLogs      CommunicationLog[]
+  architect          User                @relation("ArchitectHandshakes", fields: [architectId], references: [id], onDelete: Cascade)
+  tokens             IntegrationToken[]
+  tokenRequests      TokenRequest[]
+  commLogs           CommunicationLog[]
+  validationRequests ValidationRequest[]
+  deliveries         TokenDelivery[]
 
   @@index([architectId])
   @@index([status])
@@ -269,6 +292,50 @@ model IntegrationToken {
   @@map("integration_tokens")
 }
 
+/// The architect's first API hit with their CIDCO-issued credentials. CIDCO
+/// reviews the architect, IP and device on its dashboard and approves or
+/// rejects — only an approval establishes the channel and issues tokens.
+model ValidationRequest {
+  id           String         @id @default(cuid())
+  handshakeId  String
+  presentedIp  String?
+  deviceInfo   String?
+  status       ApprovalStatus @default(PENDING)
+  reviewedById String?
+  reviewedAt   DateTime?
+  reviewNote   String?
+  createdAt    DateTime       @default(now())
+
+  handshake ArchitectHandshake @relation(fields: [handshakeId], references: [id], onDelete: Cascade)
+
+  @@index([handshakeId])
+  @@index([status])
+  @@map("validation_requests")
+}
+
+/// A token handed to the architect through their dashboard. Holds the
+/// plaintext only until the architect acknowledges having saved it, after
+/// which the values are cleared and only the prefixes remain.
+model TokenDelivery {
+  id               String       @id @default(cuid())
+  handshakeId      String
+  kind             DeliveryKind
+  message          String
+  accessToken      String?
+  refreshToken     String?
+  accessPrefix     String?
+  refreshPrefix    String?
+  accessExpiresAt  DateTime?
+  refreshExpiresAt DateTime?
+  acknowledgedAt   DateTime?
+  createdAt        DateTime     @default(now())
+
+  handshake ArchitectHandshake @relation(fields: [handshakeId], references: [id], onDelete: Cascade)
+
+  @@index([handshakeId])
+  @@map("token_deliveries")
+}
+
 /// An architect's request for a fresh token (typically after expiry). The
 /// admin fulfils it by generating a new token.
 model TokenRequest {
@@ -276,6 +343,10 @@ model TokenRequest {
   handshakeId   String
   reason        String?
   status        TokenRequestStatus @default(PENDING)
+  kind          TokenRequestKind   @default(ACCESS_RENEWAL)
+  // Hash of the refresh token the architect presented, so CIDCO can verify it
+  // at approval time without ever storing the plaintext.
+  refreshTokenHash String?
   requestedIp   String?
   resolvedById  String?
   issuedTokenId String?

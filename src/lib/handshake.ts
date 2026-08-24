@@ -80,7 +80,11 @@ export type CommEvent =
   | 'IP_WHITELISTED'
   | 'WHITELIST_RESET'
   | 'TOKEN_POLICY_UPDATED'
-  | 'TOKEN_EXPIRY_UPDATED';
+  | 'TOKEN_EXPIRY_UPDATED'
+  | 'VALIDATION_SUBMITTED'
+  | 'VALIDATION_APPROVED'
+  | 'VALIDATION_REJECTED'
+  | 'TOKENS_DELIVERED';
 
 export async function logComm(params: {
   handshakeId: string | null;
@@ -269,6 +273,36 @@ export async function issueTokenPair(params: {
     accessTtlDays,
     refreshTtlDays,
   };
+}
+
+/**
+ * Places tokens on the architect's dashboard as a message. The plaintext lives
+ * here only until the architect acknowledges having saved it.
+ */
+export async function deliverTokens(params: {
+  handshakeId: string;
+  kind: 'INITIAL_PAIR' | 'ACCESS_RENEWAL' | 'FULL_REISSUE';
+  message: string;
+  accessToken?: string | null;
+  refreshToken?: string | null;
+  accessPrefix?: string | null;
+  refreshPrefix?: string | null;
+  accessExpiresAt?: Date | null;
+  refreshExpiresAt?: Date | null;
+}) {
+  return prisma.tokenDelivery.create({
+    data: {
+      handshakeId: params.handshakeId,
+      kind: params.kind,
+      message: params.message,
+      accessToken: params.accessToken ?? null,
+      refreshToken: params.refreshToken ?? null,
+      accessPrefix: params.accessPrefix ?? null,
+      refreshPrefix: params.refreshPrefix ?? null,
+      accessExpiresAt: params.accessExpiresAt ?? null,
+      refreshExpiresAt: params.refreshExpiresAt ?? null,
+    },
+  });
 }
 
 /**

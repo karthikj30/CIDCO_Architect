@@ -3,30 +3,23 @@ import { prisma } from '@/lib/prisma';
 import { fail, handleError, ok } from '@/lib/api';
 import { withLogging } from '@/lib/logger';
 import { validateHandshakeSchema } from '@/lib/validation';
-import {
-  checkWhitelist,
-  clientIp,
-  fingerprintDevice,
-  issueTokenPair,
-  logComm,
-  normaliseIp,
-  verifyCredentials,
-} from '@/lib/handshake';
+import { checkWhitelist, clientIp, logComm, normaliseIp, verifyCredentials } from '@/lib/handshake';
 
 export const dynamic = 'force-dynamic';
 
 /**
  * POST /api/architect/validate
  *
- * The architect presents the {clientId, clientSecret} the admin issued. The
- * CIDCO backend confirms the credentials belong to a live handshake for the
- * right architect — that is both sides validating in one call. On success the
- * handshake becomes ESTABLISHED (the 2-way channel) and we return 200 OK. On
- * any validation failure we return 504, per the CIDCO protocol.
+ * The architect's first API hit, using the user id and password CIDCO emailed
+ * them, declaring the IP address and device CIDCO should register.
  *
- * Note: the request body carries the secret, so it is deliberately excluded
- * from raw request logging (captureBody:false); the exchange is still recorded
- * in the communication log without the secret.
+ * CIDCO does NOT issue tokens here. The credentials are checked, then the
+ * attempt is queued on the CIDCO dashboard as a validation request so an
+ * officer can see the architect, IP and device and approve it. On approval
+ * CIDCO generates the access and refresh tokens and delivers them to the
+ * architect's dashboard.
+ *
+ * Wrong credentials still answer 504 — "handshake not validated".
  */
 export async function POST(req: NextRequest) {
   return withLogging(
@@ -48,17 +41,14 @@ export async function POST(req: NextRequest) {
             detail: `Validation failed for clientId "${clientId}": ${check.reason}`,
             ip,
           });
-          // 504 signals "handshake not validated" in the CIDCO protocol.
           return fail(`Validation failed: ${check.reason}`, 504);
         }
 
         const handshake = check.handshake;
-        const now = new Date();
-
-        // The IP the architect declares wins; otherwise use the socket IP.
         const presentedIp = normaliseIp(ipAddress) ?? normaliseIp(ip);
 
-        // If this handshake is already whitelisted, the caller must match it.
+        // If CIDCO already registered an IP for this handshake, the caller must
+        // match it — otherwise the request never reaches the approval queue.
         const gate = checkWhitelist(handshake, presentedIp);
         if (!gate.ok) {
           await logComm({
@@ -72,91 +62,65 @@ export async function POST(req: NextRequest) {
           return fail(`Validation failed: ${gate.reason}`, 504);
         }
 
-        const firstWhitelist = !handshake.whitelistedIp;
-        const updated = await prisma.architectHandshake.update({
-          where: { id: handshake.id },
+        // One open request at a time.
+        const existing = await prisma.validationRequest.findFirst({
+          where: { handshakeId: handshake.id, status: 'PENDING' },
+        });
+        if (existing) {
+          return ok(
+            {
+              message:
+                'Your request is already with CIDCO and is awaiting approval. You will receive your tokens on your dashboard once an officer approves it.',
+              status: 'AWAITING_APPROVAL',
+              requestId: existing.id,
+              submittedAt: existing.createdAt,
+            },
+            202,
+          );
+        }
+
+        const request = await prisma.validationRequest.create({
           data: {
-            status: 'ESTABLISHED',
-            architectValidatedAt: now,
-            establishedAt: handshake.establishedAt ?? now,
-            lastValidatedIp: ip,
-            // Whitelist the architect's IP + device on first successful validate.
-            whitelistedIp: handshake.whitelistedIp ?? presentedIp,
-            deviceInfo: deviceInfo ?? handshake.deviceInfo,
-            deviceFingerprint: deviceInfo ? fingerprintDevice(deviceInfo) : handshake.deviceFingerprint,
-            whitelistedAt: handshake.whitelistedAt ?? (presentedIp ? now : null),
+            handshakeId: handshake.id,
+            presentedIp,
+            deviceInfo: deviceInfo ?? null,
           },
-          include: { architect: { select: { id: true, name: true, email: true } } },
         });
 
-        if (firstWhitelist && presentedIp) {
-          await logComm({
-            handshakeId: handshake.id,
-            direction: 'ADMIN_TO_ARCHITECT',
-            event: 'IP_WHITELISTED',
-            statusCode: 200,
-            detail: `Whitelisted IP ${presentedIp}${deviceInfo ? ` · device: ${deviceInfo}` : ''}`,
-            ip,
-          });
-        }
+        await prisma.architectHandshake.update({
+          where: { id: handshake.id },
+          data: {
+            status: handshake.status === 'ESTABLISHED' ? 'ESTABLISHED' : 'AWAITING_APPROVAL',
+            architectValidatedAt: new Date(),
+            lastValidatedIp: ip,
+          },
+        });
 
         await logComm({
           handshakeId: handshake.id,
           direction: 'ARCHITECT_TO_ADMIN',
-          event: 'ARCHITECT_VALIDATED',
-          statusCode: 200,
-          detail: `Architect ${updated.architect.email} validated successfully`,
-          ip,
-        });
-        await logComm({
-          handshakeId: handshake.id,
-          direction: 'ADMIN_TO_ARCHITECT',
-          event: 'CHANNEL_ESTABLISHED',
-          statusCode: 200,
-          detail: 'Two-way channel established',
-          ip,
-        });
-        // Expiry windows come from the handshake's policy, which CIDCO edits
-        // from the dashboard — so a dashboard change takes effect on the API.
-        const issued = await issueTokenPair({
-          handshakeId: handshake.id,
-          accessTtlDays: updated.accessTokenTtlDays,
-          refreshTtlDays: updated.refreshTokenTtlDays,
-        });
-
-        await logComm({
-          handshakeId: handshake.id,
-          direction: 'ADMIN_TO_ARCHITECT',
-          event: 'TOKEN_GENERATED',
-          statusCode: 200,
-          detail: `Access token (${issued.accessTtlDays}d) and refresh token (${issued.refreshTtlDays}d) issued after validation`,
+          event: 'VALIDATION_SUBMITTED',
+          statusCode: 202,
+          detail: `Architect presented credentials from IP ${presentedIp ?? 'unknown'}${deviceInfo ? ` · device: ${deviceInfo}` : ''} — awaiting CIDCO approval`,
           ip,
         });
 
-        return ok({
-          message: 'Validated. Two-way communication established with CIDCO.',
-          established: true,
-          accessToken: issued.accessToken,
-          refreshToken: issued.refreshToken,
-          expiresInDays: issued.accessTtlDays,
-          refreshExpiresInDays: issued.refreshTtlDays,
-          accessTokenExpiresAt: issued.accessExpiresAt,
-          refreshTokenExpiresAt: issued.refreshExpiresAt,
-          whitelistedIp: updated.whitelistedIp,
-          deviceInfo: updated.deviceInfo,
-          handshake: {
-            id: updated.id,
-            clientId: updated.clientId,
-            status: updated.status,
-            establishedAt: updated.establishedAt,
-            architect: updated.architect,
+        return ok(
+          {
+            message:
+              'Credentials accepted and sent to CIDCO for approval. CIDCO will verify your identity, IP address and device, then deliver your access and refresh tokens to your dashboard.',
+            status: 'AWAITING_APPROVAL',
+            requestId: request.id,
+            submittedAt: request.createdAt,
+            presentedIp,
+            deviceInfo: deviceInfo ?? null,
+            nextSteps: [
+              'Wait for CIDCO to approve the request.',
+              'Your access and refresh tokens will appear on your dashboard once approved.',
+            ],
           },
-          nextSteps: [
-            'Send AQI data to POST /api/architect/data with header: Authorization: Bearer <accessToken>.',
-            'If the access token expires (503), POST /api/architect/refresh with your refresh token.',
-            'If both tokens expire (503), validate again with your clientId and clientSecret.',
-          ],
-        });
+          202,
+        );
       } catch (error) {
         return handleError(error);
       }
