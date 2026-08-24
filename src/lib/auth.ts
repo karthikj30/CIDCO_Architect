@@ -55,9 +55,24 @@ export async function verifyToken(token: string): Promise<SessionPayload | null>
   }
 }
 
-export async function setSessionCookie(token: string) {
+// The two portals get their own cookie, so a CIDCO officer and an architect can
+// be signed in side by side in the same browser without evicting each other.
+export const OFFICER_COOKIE = 'cidco_officer_session';
+export const ARCHITECT_COOKIE = 'cidco_architect_session';
+
+export type SessionScope = 'OFFICER' | 'ARCHITECT';
+
+export function scopeForRole(role: Role): SessionScope {
+  return role === 'ARCHITECT' ? 'ARCHITECT' : 'OFFICER';
+}
+
+export function cookieForScope(scope: SessionScope) {
+  return scope === 'ARCHITECT' ? ARCHITECT_COOKIE : OFFICER_COOKIE;
+}
+
+export async function setSessionCookie(token: string, scope: SessionScope) {
   const jar = await cookies();
-  jar.set(SESSION_COOKIE, token, {
+  jar.set(cookieForScope(scope), token, {
     httpOnly: true,
     sameSite: 'lax',
     secure: process.env.NODE_ENV === 'production',
@@ -66,19 +81,42 @@ export async function setSessionCookie(token: string) {
   });
 }
 
-export async function clearSessionCookie() {
+/** Clears one portal's session, or both when no scope is given. */
+export async function clearSessionCookie(scope?: SessionScope) {
   const jar = await cookies();
-  jar.set(SESSION_COOKIE, '', { httpOnly: true, path: '/', maxAge: 0 });
+  const names = scope ? [cookieForScope(scope)] : [OFFICER_COOKIE, ARCHITECT_COOKIE, SESSION_COOKIE];
+  for (const name of names) {
+    jar.set(name, '', { httpOnly: true, path: '/', maxAge: 0 });
+  }
 }
 
 /** Reads the session for server components / pages. */
-export async function getSessionUser(): Promise<User | null> {
+export async function getSessionUser(scope?: SessionScope): Promise<User | null> {
   const jar = await cookies();
-  const token = jar.get(SESSION_COOKIE)?.value;
+  const names = scope
+    ? [cookieForScope(scope)]
+    : [OFFICER_COOKIE, ARCHITECT_COOKIE, SESSION_COOKIE];
+  for (const name of names) {
+    const token = jar.get(name)?.value;
+    if (!token) continue;
+    const payload = await verifyToken(token);
+    if (!payload) continue;
+    const user = await prisma.user.findUnique({ where: { id: payload.sub } });
+    if (user) return user;
+  }
+  return null;
+}
+
+/** Resolves the signed-in user for one portal from a request's cookies. */
+export async function sessionUserFor(req: NextRequest, scope: SessionScope): Promise<User | null> {
+  const token = req.cookies.get(cookieForScope(scope))?.value;
   if (!token) return null;
   const payload = await verifyToken(token);
   if (!payload) return null;
-  return prisma.user.findUnique({ where: { id: payload.sub } });
+  const user = await prisma.user.findUnique({ where: { id: payload.sub } });
+  if (!user) return null;
+  // A cookie must match the portal it belongs to.
+  return scopeForRole(user.role) === scope ? user : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -131,11 +169,18 @@ export async function authenticate(req: NextRequest): Promise<AuthedUser | null>
 
   const header = req.headers.get('authorization');
   const bearer = header?.toLowerCase().startsWith('bearer ') ? header.slice(7).trim() : null;
-  const token = bearer ?? req.cookies.get(SESSION_COOKIE)?.value;
-  if (!token) return null;
+  const candidates = [
+    bearer,
+    req.cookies.get(OFFICER_COOKIE)?.value,
+    req.cookies.get(ARCHITECT_COOKIE)?.value,
+    req.cookies.get(SESSION_COOKIE)?.value,
+  ].filter(Boolean) as string[];
 
-  const payload = await verifyToken(token);
-  if (!payload) return null;
-  const user = await prisma.user.findUnique({ where: { id: payload.sub } });
-  return user ? { user, via: 'session' } : null;
+  for (const token of candidates) {
+    const payload = await verifyToken(token);
+    if (!payload) continue;
+    const user = await prisma.user.findUnique({ where: { id: payload.sub } });
+    if (user) return { user, via: 'session' };
+  }
+  return null;
 }

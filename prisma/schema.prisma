@@ -84,6 +84,12 @@ model User {
   firmName     String?
   councilRegNo String?
   phone        String?
+  // Architect-chosen extras captured when they set up their own login.
+  designation  String?
+  address      String?
+  // Set when the architect creates their own username/password after CIDCO
+  // approves their validation. Null means the placeholder login still stands.
+  accountSetupAt DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -327,6 +333,9 @@ model TokenDelivery {
   refreshPrefix    String?
   accessExpiresAt  DateTime?
   refreshExpiresAt DateTime?
+  // The endpoint URLs the architect needs, sent with the tokens so they can
+  // copy everything from one place.
+  endpoints        Json?
   acknowledgedAt   DateTime?
   createdAt        DateTime     @default(now())
 

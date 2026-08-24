@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import ArchitectSignIn, { type Architect } from './ArchitectSignIn';
+import ArchitectOnboarding from './ArchitectOnboarding';
+import type { Architect } from './ArchitectSignIn';
 import ConnectionPanel from './ConnectionPanel';
 import AutomatePanel from './AutomatePanel';
 import MessagesPanel from './MessagesPanel';
@@ -32,6 +33,7 @@ export type MeData = {
       accessToken: string | null; refreshToken: string | null;
       accessPrefix: string | null; refreshPrefix: string | null;
       accessExpiresAt: string | null; refreshExpiresAt: string | null;
+      endpoints: Record<string, string> | null;
       acknowledgedAt: string | null; createdAt: string;
     }>;
     validationRequests: Array<{
@@ -101,7 +103,7 @@ export default function ArchitectWorkspace() {
   if (!me || !architect) {
     return (
       <main className="flex-1 overflow-y-auto p-8">
-        <ArchitectSignIn
+        <ArchitectOnboarding
           onSignedIn={async (a) => {
             setArchitect(a);
             await reload();

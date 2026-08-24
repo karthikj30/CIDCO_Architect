@@ -28,8 +28,10 @@ so an architect's station (or Postman) can drive the same flow without a browser
 **The flow**
 
 *CASE 1 — first-time setup*
-1. **CIDCO issues a user id + password** (`clientId` / `clientSecret`) from *Architect Handshakes*
-   and sends it to the architect **by email or message**, off-platform.
+1. **CIDCO issues a user id + password** (`clientId` / `clientSecret` and an expiry date — nothing
+   else) from *Architect Handshakes* and sends it to the architect **by email or message**,
+   off-platform. The endpoint URLs are not in that bundle: they live in the API documentation, and
+   CIDCO repeats them in the message it delivers with the tokens.
 2. **The architect hits the CIDCO API manually** — `POST /api/architect/validate` with those
    credentials plus their **IP address and device info**. No tokens are issued yet: the attempt is
    queued and answers **202 AWAITING_APPROVAL**.
@@ -38,8 +40,12 @@ so an architect's station (or Postman) can drive the same flow without a browser
 4. On approval CIDCO whitelists the IP/device, generates the **access token (7 d)** and **refresh
    token (30 d)**, and **delivers both to the architect's dashboard** as a message: *"Your API
    request has been validated by CIDCO. Here are your access token and refresh token — keep them
-   safely."*
-5. The architect **saves the access token on their dashboard and clicks Automate** — the reading is
+   safely."* The same message lists **every endpoint URL**, each with a copy button, so the architect
+   can paste them straight into Postman or their sender.
+5. **The architect creates their own username and password** and fills in their details — name,
+   firm, COA registration number, phone, designation, address. Those details are what CIDCO then
+   sees against the handshake under *Architect Handshakes → Manage*.
+6. The architect **saves the access token on their dashboard and clicks Automate** — the reading is
    then posted continuously (default every 3 h) with the access token as the header and the data as
    the body. CIDCO validates the token on every hit before storing.
 
@@ -91,6 +97,8 @@ timeline and to the architect on their *Activity log* tab.
 | Method | Path | Auth | Description |
 | ------ | ---- | ---- | ----------- |
 | `POST` | `/api/architect/validate` | clientId + secret (+ ip/device) | Submit for CIDCO approval → **202 AWAITING_APPROVAL** / 504 rejected. Tokens arrive on the dashboard after approval |
+| `POST` | `/api/architect/handshake-status` | clientId + secret | Where the validation stands, before the architect has an account |
+| `POST` | `/api/architect/register` | clientId + secret | After approval — choose a username and password and record the architect's details → **201**, signed in |
 | `POST` | `/api/architect/data` | Bearer access token | Send an AQI reading → stored. **503 + the reading returned** when a token has expired |
 | `POST` | `/api/architect/token-requests` | refresh token | CASE 2 — ask CIDCO for a new access token → **202**, delivered after approval |
 | `GET` | `/api/architect/me` | architect session | Dashboard data: handshakes, token deliveries, readings, logs |
@@ -201,13 +209,19 @@ Seeded logins: CIDCO officer `officer@cidco.example` / `Password123`; architect
 
 ### Architect portal (`/architect`)
 
-The architect signs in with their own account and:
+An architect who has no account yet is walked through onboarding: they enter **the user id and
+password CIDCO emailed them**, the page waits while a CIDCO officer reviews the request (polling, so
+approval lands without a reload), and once approved they **create their own username and password**
+and fill in their details. They are signed in from there. Returning architects use *Already have an
+account? Sign in*.
 
-- **Connection** — pastes the credential JSON CIDCO sent (or types clientId/secret), optionally
-  declares the IP and device to whitelist, and clicks **Validate**. CIDCO returns the access and
-  refresh tokens, which the portal stores **in that browser only** (`localStorage`). The panel shows
-  live expiry countdowns for both tokens, the handshake status as CIDCO sees it, and a **Renew access
-  token** button (CASE 2).
+Once inside:
+
+- **Messages** — everything CIDCO sends: the access and refresh tokens (plaintext until marked
+  saved), **and every endpoint URL with a copy button**. One click loads the tokens into this
+  dashboard.
+- **Connection** — declares the IP and device to whitelist, shows live expiry countdowns for both
+  tokens, the handshake status as CIDCO sees it, and the **request a new access token** flow (CASE 2).
 - **Send AQI data** — a form covering every parameter, posted to `POST /api/architect/data` with the
   access token: the same call a station makes every 3 hours. A 503 is rendered with its
   `ACCESS_EXPIRED` / `BOTH_EXPIRED` reason and the exact next step.

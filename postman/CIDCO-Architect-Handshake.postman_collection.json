@@ -48,6 +48,18 @@
     {
       "key": "refreshToken",
       "value": ""
+    },
+    {
+      "key": "myUsername",
+      "value": "rhea@nairdesign.in"
+    },
+    {
+      "key": "myPassword",
+      "value": "MyOwnPass123"
+    },
+    {
+      "key": "validationRequestId",
+      "value": ""
     }
   ],
   "item": [
@@ -137,6 +149,111 @@
               ]
             },
             "description": "Issues the credential JSON to hand to the architect. clientSecret is returned once."
+          }
+        },
+        {
+          "name": "List validation requests (approval queue)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('listed', () => pm.response.to.have.status(200));",
+                  "const rows = pm.response.json().data.requests;",
+                  "const mine = rows.find(r => r.handshake.clientId === pm.collectionVariables.get('clientId'));",
+                  "if (mine) pm.collectionVariables.set('validationRequestId', mine.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/validation-requests?status=PENDING",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "validation-requests?status=PENDING"
+              ]
+            },
+            "description": "Every architect who has presented their CIDCO credentials and is waiting to be approved. Shows the architect, the IP they called from and their device."
+          }
+        },
+        {
+          "name": "Approve validation request (issues + delivers tokens)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('approved', () => pm.response.to.have.status(200));",
+                  "console.log(pm.response.json().data.message);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/validation-requests/{{validationRequestId}}/approve",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "validation-requests",
+                "{{validationRequestId}}",
+                "approve"
+              ]
+            },
+            "description": "The officer approves: CIDCO whitelists the IP/device, establishes the channel, generates the access + refresh pair and delivers both \u2014 plus every endpoint URL \u2014 to the architect's dashboard as a message."
+          }
+        },
+        {
+          "name": "Reject validation request",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reviewNote\": \"IP does not match the registered site\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/validation-requests/{{validationRequestId}}/reject",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "validation-requests",
+                "{{validationRequestId}}",
+                "reject"
+              ]
+            },
+            "description": "Refuse the attempt. The architect sees the note on their dashboard."
           }
         },
         {
@@ -408,23 +525,21 @@
       ]
     },
     {
-      "name": "Architect (Postman only)",
+      "name": "Architect",
       "item": [
         {
-          "name": "Validate \u2014 success (200, establishes channel)",
+          "name": "Validate \u2014 present CIDCO credentials (expect 202)",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('established', () => pm.response.to.have.status(200));",
+                  "pm.test('queued for CIDCO', () => pm.response.to.have.status(202));",
                   "const d = pm.response.json().data;",
-                  "pm.expect(d.established).to.be.true;",
-                  "pm.collectionVariables.set('accessToken', d.accessToken);",
-                  "pm.collectionVariables.set('refreshToken', d.refreshToken);",
-                  "pm.collectionVariables.set('token', d.accessToken);",
-                  "console.log('access exp days', d.expiresInDays, '| refresh exp days', d.refreshExpiresInDays);"
+                  "pm.expect(d.status).to.eql('AWAITING_APPROVAL');",
+                  "pm.collectionVariables.set('validationRequestId', d.requestId);",
+                  "console.log(d.message);"
                 ]
               }
             }
@@ -452,11 +567,11 @@
                 "validate"
               ]
             },
-            "description": "CASE 1. Send credentials plus the IP/device to whitelist. Returns BOTH tokens. NOTE: replace {{$randomIP}} with your real station IP \u2014 CIDCO whitelists whatever you send here and later calls must match it."
+            "description": "CASE 1, step 1. Send the user id and password CIDCO emailed you, plus the IP/device to whitelist. No tokens are issued here \u2014 the request is queued for a CIDCO officer and answers 202. NOTE: replace {{$randomIP}} with your real station IP; CIDCO whitelists whatever you send and later calls must match it."
           }
         },
         {
-          "name": "Validate \u2014 failure (expect 504)",
+          "name": "Validate \u2014 wrong password (expect 504)",
           "event": [
             {
               "listen": "test",
@@ -492,6 +607,87 @@
               ]
             },
             "description": "Demonstrates the 504 the CIDCO protocol returns when validation fails."
+          }
+        },
+        {
+          "name": "Check my validation status",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('ok', () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json().data;",
+                  "console.log('approved:', d.approved, '| needs account setup:', d.needsAccountSetup);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"clientId\": \"{{clientId}}\",\n  \"clientSecret\": \"{{clientSecret}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/architect/handshake-status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "architect",
+                "handshake-status"
+              ]
+            },
+            "description": "Works before you have a portal account. Tells you whether CIDCO approved you and whether you still have to choose a username and password."
+          }
+        },
+        {
+          "name": "Create my own username and password",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('account created', () => pm.response.to.have.status(201));",
+                  "console.log(pm.response.json().data.message);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"clientId\": \"{{clientId}}\",\n  \"clientSecret\": \"{{clientSecret}}\",\n  \"email\": \"{{myUsername}}\",\n  \"password\": \"{{myPassword}}\",\n  \"name\": \"Ar. Rhea Nair\",\n  \"firmName\": \"Nair Design Studio\",\n  \"councilRegNo\": \"CA/2019/12345\",\n  \"phone\": \"+91 98200 11223\",\n  \"designation\": \"Principal Architect\",\n  \"address\": \"Plot 7, Sector 15, CBD Belapur\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/architect/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "architect",
+                "register"
+              ]
+            },
+            "description": "Run this once CIDCO has approved you. You pick the login you will use from now on, and the details you enter here are what CIDCO sees against your handshake."
           }
         },
         {
@@ -540,25 +736,19 @@
                 "data"
               ]
             },
-            "description": "Full monitoring-station payload. `measuredAt` uses the {{$isoTimestamp}} dynamic variable, so scheduling this request (\u22ef \u2192 Schedule run, or a Monitor) every 3 hours feeds a fresh reading into CIDCO's database on each run. CIDCO stamps the Data Receipt Timestamp itself. For photos, switch the body to form-data and add 'document' and 'boardPhotos' file fields."
+            "description": "Paste the access token from your dashboard message into the accessToken variable first. Each call inserts one reading, so schedule it every 3 hours. On expiry CIDCO answers 503 and returns your reading under details.returnedData."
           }
         },
         {
-          "name": "Refresh access token (CASE 2)",
+          "name": "Request a new access token (CASE 2)",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "if (pm.response.code === 200) {",
-                  "  const d = pm.response.json().data;",
-                  "  pm.collectionVariables.set('accessToken', d.accessToken);",
-                  "  pm.collectionVariables.set('token', d.accessToken);",
-                  "  pm.test('access token renewed', () => pm.expect(d.accessToken).to.be.a('string'));",
-                  "} else if (pm.response.code === 503) {",
-                  "  console.log('CASE 3 \u2014 refresh token expired. Re-run Validate with clientId + clientSecret.');",
-                  "}"
+                  "pm.test('queued for CIDCO', () => pm.response.to.have.status(202));",
+                  "console.log(pm.response.json().data.message);"
                 ]
               }
             }
@@ -573,20 +763,20 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}"
+              "raw": "{\n  \"clientId\": \"{{clientId}}\",\n  \"clientSecret\": \"{{clientSecret}}\",\n  \"refreshToken\": \"{{refreshToken}}\",\n  \"reason\": \"access token expired\"\n}"
             },
             "url": {
-              "raw": "{{baseUrl}}/api/architect/refresh",
+              "raw": "{{baseUrl}}/api/architect/token-requests",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
                 "architect",
-                "refresh"
+                "token-requests"
               ]
             },
-            "description": "CASE 2 \u2014 run this when 'Send AQI data' returns 503 / ACCESS_EXPIRED. Returns a new access token; your refresh token stays the same. If this itself returns 503 / BOTH_EXPIRED that is CASE 3: re-run 'Validate \u2014 success'."
+            "description": "Run this when a data send answers 503 ACCESS_EXPIRED (that response also hands your unsent reading back). The request pops up on the CIDCO dashboard; an officer verifies your refresh token and delivers a new access token as a message. If the refresh token has lapsed too this answers 503 BOTH_EXPIRED \u2014 that is CASE 3, go back to Validate."
           }
         },
         {

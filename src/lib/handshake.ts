@@ -4,6 +4,7 @@ import type {
   ArchitectHandshake,
   CommDirection,
   IntegrationToken,
+  Prisma,
 } from '@prisma/client';
 import { prisma } from './prisma';
 
@@ -84,7 +85,8 @@ export type CommEvent =
   | 'VALIDATION_SUBMITTED'
   | 'VALIDATION_APPROVED'
   | 'VALIDATION_REJECTED'
-  | 'TOKENS_DELIVERED';
+  | 'TOKENS_DELIVERED'
+  | 'ACCOUNT_CREATED';
 
 export async function logComm(params: {
   handshakeId: string | null;
@@ -289,6 +291,7 @@ export async function deliverTokens(params: {
   refreshPrefix?: string | null;
   accessExpiresAt?: Date | null;
   refreshExpiresAt?: Date | null;
+  baseUrl?: string | null;
 }) {
   return prisma.tokenDelivery.create({
     data: {
@@ -301,6 +304,7 @@ export async function deliverTokens(params: {
       refreshPrefix: params.refreshPrefix ?? null,
       accessExpiresAt: params.accessExpiresAt ?? null,
       refreshExpiresAt: params.refreshExpiresAt ?? null,
+      endpoints: params.baseUrl ? (architectEndpoints(params.baseUrl) as Prisma.InputJsonValue) : undefined,
     },
   });
 }
@@ -378,20 +382,29 @@ export async function resolveHandshakeForRead(
   return { ok: false, reason: 'Provide a Bearer token, or x-client-id and x-client-secret headers.' };
 }
 
-/** Shape of the credential bundle the admin hands to the architect (point 2). */
-export function credentialPayload(params: {
-  handshake: ArchitectHandshake;
-  secret: string;
-  baseUrl: string;
-}) {
-  const { handshake, secret, baseUrl } = params;
+/**
+ * Every URL the architect needs, sent with the tokens so they can copy the
+ * whole set from the one dashboard message.
+ */
+export function architectEndpoints(baseUrl: string) {
   return {
-    clientId: handshake.clientId,
-    clientSecret: secret,
-    expiryDate: handshake.credentialExpiresAt.toISOString(),
+    sendDataUrl: `${baseUrl}/api/architect/data`,
+    requestTokenUrl: `${baseUrl}/api/architect/token-requests`,
     validateUrl: `${baseUrl}/api/architect/validate`,
-    tokenRequestUrl: `${baseUrl}/api/architect/token-requests`,
-    dataUrl: `${baseUrl}/api/architect/data`,
     logsUrl: `${baseUrl}/api/architect/logs`,
+    docsUrl: `${baseUrl}/docs/architect`,
+  };
+}
+
+/**
+ * The credential bundle CIDCO emails to the architect: just the user id, the
+ * password and how long it is valid. Endpoint URLs live in the API docs and
+ * are repeated in the token delivery once the architect is approved.
+ */
+export function credentialPayload(params: { handshake: ArchitectHandshake; secret: string }) {
+  return {
+    clientId: params.handshake.clientId,
+    clientSecret: params.secret,
+    expiryDate: params.handshake.credentialExpiresAt.toISOString(),
   };
 }

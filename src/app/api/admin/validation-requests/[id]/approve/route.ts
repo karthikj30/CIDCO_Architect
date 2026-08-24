@@ -25,6 +25,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     if ('error' in guard) return guard.error;
     const { id } = await params;
     const ip = clientIp(req);
+    const baseUrl = new URL(req.url).origin;
 
     const request = await prisma.validationRequest.findUnique({
       where: { id },
@@ -77,6 +78,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       refreshPrefix: issued.record.refreshTokenPrefix,
       accessExpiresAt: issued.accessExpiresAt,
       refreshExpiresAt: issued.refreshExpiresAt,
+      baseUrl,
     });
 
     await logComm({

@@ -1,6 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { setSessionCookie, signToken, verifyPassword } from '@/lib/auth';
+import { scopeForRole, setSessionCookie, signToken, verifyPassword } from '@/lib/auth';
 import { loginSchema } from '@/lib/validation';
 import { fail, handleError, ok } from '@/lib/api';
 import { logAudit } from '@/lib/reports';
@@ -16,7 +16,7 @@ export async function POST(req: NextRequest) {
     }
 
     const token = await signToken({ sub: user.id, email: user.email, role: user.role, name: user.name });
-    await setSessionCookie(token);
+    await setSessionCookie(token, scopeForRole(user.role));
     await logAudit('user.login', { userId: user.id, detail: user.email });
 
     return ok({

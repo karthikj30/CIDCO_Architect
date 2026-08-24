@@ -92,6 +92,7 @@ export async function GET(req: NextRequest) {
           refreshPrefix: d.refreshPrefix,
           accessExpiresAt: d.accessExpiresAt,
           refreshExpiresAt: d.refreshExpiresAt,
+          endpoints: d.endpoints,
           acknowledgedAt: d.acknowledgedAt,
           createdAt: d.createdAt,
         })),

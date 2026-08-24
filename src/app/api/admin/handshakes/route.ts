@@ -121,10 +121,9 @@ export async function POST(req: NextRequest) {
       ip: clientIp(req),
     });
 
-    const baseUrl = new URL(req.url).origin;
     return ok(
       {
-        message: 'Handshake credentials issued. Send this JSON to the architect — the secret is shown only once.',
+        message: 'Handshake credentials issued. Email this user id and password to the architect — the password is shown only once.',
         handshake: {
           id: handshake.id,
           status: handshake.status,
@@ -132,7 +131,7 @@ export async function POST(req: NextRequest) {
           createdAt: handshake.createdAt,
         },
         // This is the exact payload the architect validates with (spec point 2).
-        credential: credentialPayload({ handshake, secret, baseUrl }),
+        credential: credentialPayload({ handshake, secret }),
       },
       201,
     );

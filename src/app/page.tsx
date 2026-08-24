@@ -1,15 +1,9 @@
-import { prisma } from '@/lib/prisma';
 import PortalWorkspace from '@/components/PortalWorkspace';
 
 // Ensure this page is dynamically rendered since logs change frequently
 export const dynamic = 'force-dynamic';
 
-export default async function ApiPortalPage() {
-  const logs = await prisma.apiRequestLog.findMany({
-    orderBy: { createdAt: 'desc' },
-    take: 50,
-  });
-
+export default function ApiPortalPage() {
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 font-sans overflow-hidden">
       <header className="border-b border-slate-200 bg-white flex-none">
@@ -29,7 +23,7 @@ export default async function ApiPortalPage() {
         </div>
       </header>
 
-      <PortalWorkspace initialLogs={logs} />
+      <PortalWorkspace />
     </div>
   );
 }

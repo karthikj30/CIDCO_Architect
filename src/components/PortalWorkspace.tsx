@@ -1,19 +1,17 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import ApiTester from './ApiTester';
-import ApiLogsTable from './ApiLogsTable';
 import AdminSignIn from './admin/AdminSignIn';
 import HandshakesPanel from './admin/HandshakesPanel';
 import TokenRequestsPanel from './admin/TokenRequestsPanel';
 import CommLogsPanel from './admin/CommLogsPanel';
 import ValidationRequestsPanel from './admin/ValidationRequestsPanel';
 import DataTablePanel from './admin/DataTablePanel';
-import type { ApiRequestLog } from '@prisma/client';
 
-type Tab = 'tester' | 'logs' | 'data' | 'handshakes' | 'validations' | 'requests' | 'comm';
+type Tab = 'data' | 'handshakes' | 'validations' | 'requests' | 'comm';
 type AdminUser = { id: string; name: string; email: string; role: string };
 
+// Every tab in this portal is officer-only.
 const ADMIN_TABS: Tab[] = ['data', 'handshakes', 'validations', 'requests', 'comm'];
 
 function NavButton({
@@ -37,8 +35,8 @@ function NavButton({
   );
 }
 
-export default function PortalWorkspace({ initialLogs }: { initialLogs: ApiRequestLog[] }) {
-  const [activeTab, setActiveTab] = useState<Tab>('tester');
+export default function PortalWorkspace() {
+  const [activeTab, setActiveTab] = useState<Tab>('data');
   const [admin, setAdmin] = useState<AdminUser | null>(null);
 
   // Detect an existing CIDCO officer session (cookie) so admin tabs open directly.
@@ -54,7 +52,7 @@ export default function PortalWorkspace({ initialLogs }: { initialLogs: ApiReque
   async function signOut() {
     await fetch('/api/auth/logout', { method: 'POST' });
     setAdmin(null);
-    setActiveTab('tester');
+    setActiveTab('data');
   }
 
   const needsAdmin = ADMIN_TABS.includes(activeTab) && !admin;
@@ -64,21 +62,9 @@ export default function PortalWorkspace({ initialLogs }: { initialLogs: ApiReque
       {/* Sidebar */}
       <aside className="flex w-64 flex-col border-r border-slate-200 bg-white">
         <div className="border-b border-slate-200 p-4">
-          <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Tools</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">CIDCO Admin</p>
         </div>
         <nav className="flex-1 space-y-1 overflow-y-auto p-4">
-          <NavButton active={activeTab === 'tester'} onClick={() => setActiveTab('tester')}>
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.29 7 12 12 20.71 7"></polyline><line x1="12" y1="22" x2="12" y2="12"></line></svg>
-            API Tester
-          </NavButton>
-          <NavButton active={activeTab === 'logs'} onClick={() => setActiveTab('logs')}>
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
-            API Logs
-          </NavButton>
-
-          <div className="px-3 pb-1 pt-4 text-xs font-semibold uppercase tracking-wider text-slate-400">
-            CIDCO Admin
-          </div>
           <NavButton active={activeTab === 'data'} onClick={() => setActiveTab('data')}>
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>
             AQI Data
@@ -132,8 +118,6 @@ export default function PortalWorkspace({ initialLogs }: { initialLogs: ApiReque
           <AdminSignIn onSignedIn={setAdmin} />
         ) : (
           <>
-            {activeTab === 'tester' && <ApiTester />}
-            {activeTab === 'logs' && <ApiLogsTable logs={initialLogs} />}
             {activeTab === 'data' && <DataTablePanel />}
             {activeTab === 'handshakes' && <HandshakesPanel />}
             {activeTab === 'validations' && <ValidationRequestsPanel />}

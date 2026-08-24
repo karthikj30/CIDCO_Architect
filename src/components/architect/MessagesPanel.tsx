@@ -11,6 +11,63 @@ const KIND_LABEL: Record<string, string> = {
   FULL_REISSUE: 'New token pair',
 };
 
+// The endpoints CIDCO sends with the tokens, in the order the architect uses them.
+const ENDPOINT_LABEL: Array<[string, string]> = [
+  ['sendDataUrl', 'Send AQI data (POST)'],
+  ['requestTokenUrl', 'Request a new access token (POST)'],
+  ['validateUrl', 'Validate credentials (POST)'],
+  ['logsUrl', 'My exchange log (GET)'],
+  ['docsUrl', 'API documentation'],
+];
+
+/**
+ * The endpoint URLs CIDCO delivered with the tokens. Each row copies on click
+ * so the architect can paste it straight into Postman or their sender.
+ */
+function EndpointList({ endpoints }: { endpoints: Record<string, string> }) {
+  const [copied, setCopied] = useState<string | null>(null);
+  const rows = ENDPOINT_LABEL.filter(([key]) => endpoints[key]);
+  if (rows.length === 0) return null;
+
+  async function copy(key: string, url: string) {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(key);
+      setTimeout(() => setCopied(null), 1500);
+    } catch {
+      setCopied(null);
+    }
+  }
+
+  return (
+    <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
+      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+        Your endpoints — copy these and start sending
+      </p>
+      <ul className="mt-3 space-y-2">
+        {rows.map(([key, label]) => (
+          <li key={key} className="flex flex-wrap items-center gap-2">
+            <span className="w-56 shrink-0 text-xs text-slate-600">{label}</span>
+            <code className="min-w-0 flex-1 truncate rounded bg-slate-50 px-2 py-1 font-mono text-xs text-slate-800">
+              {endpoints[key]}
+            </code>
+            <button
+              onClick={() => copy(key, endpoints[key])}
+              className="text-xs font-semibold text-emerald-700 hover:underline"
+            >
+              {copied === key ? 'Copied ✓' : 'Copy'}
+            </button>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-3 text-xs text-slate-500">
+        Send the access token as <code className="font-mono">Authorization: Bearer &lt;access token&gt;</code>.
+        Full request and response formats are in the API documentation.
+      </p>
+    </div>
+  );
+}
+
 export default function MessagesPanel({
   me,
   saveTokens,
@@ -119,6 +176,8 @@ export default function MessagesPanel({
                       : 'No tokens were issued with this message.'}
                   </p>
                 )}
+
+                {d.endpoints && <EndpointList endpoints={d.endpoints} />}
               </div>
             );
           })}

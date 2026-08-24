@@ -200,6 +200,11 @@ export default function HandshakesPanel() {
 // --- Detail / management for one handshake ---------------------------------
 
 type Detail = {
+  architect: {
+    id: string; name: string; email: string; firmName: string | null;
+    councilRegNo: string | null; phone: string | null; designation: string | null;
+    address: string | null; accountSetupAt: string | null;
+  };
   status: string;
   establishedAt: string | null;
   architectValidatedAt: string | null;
@@ -363,6 +368,36 @@ function HandshakeDetail({ handshakeId, clientId, onChanged }: { handshakeId: st
     <div className="space-y-4">
       {error && <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</div>}
       {notice && <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{notice}</div>}
+
+      {/* What the architect entered when they set up their own login */}
+      <div className="rounded-lg border border-slate-200 bg-white p-4">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h4 className="text-sm font-semibold text-slate-900">Architect details</h4>
+          <p className="text-xs text-slate-500">
+            {detail.architect.accountSetupAt
+              ? `Entered by the architect ${fmt(detail.architect.accountSetupAt)}`
+              : 'The architect has not set up their own login yet — these are the placeholder details.'}
+          </p>
+        </div>
+        <dl className="mt-3 grid gap-x-6 gap-y-2 text-xs sm:grid-cols-3">
+          {(
+            [
+              ['Name', detail.architect.name],
+              ['Username (email)', detail.architect.email],
+              ['Firm', detail.architect.firmName],
+              ['COA reg. no.', detail.architect.councilRegNo],
+              ['Phone', detail.architect.phone],
+              ['Designation', detail.architect.designation],
+              ['Address', detail.architect.address],
+            ] as Array<[string, string | null]>
+          ).map(([label, value]) => (
+            <div key={label}>
+              <dt className="text-slate-500">{label}</dt>
+              <dd className="text-slate-900">{value || <span className="text-slate-400">—</span>}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
 
       {/* Token expiry policy + IP whitelist */}
       <div className="grid gap-4 lg:grid-cols-2">

@@ -15,7 +15,21 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     const handshake = await prisma.architectHandshake.findUnique({
       where: { id },
       include: {
-        architect: { select: { id: true, name: true, email: true, firmName: true } },
+        // Includes the details the architect filled in when they set up their
+        // own login, so the officer sees who is actually on the other end.
+        architect: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            firmName: true,
+            councilRegNo: true,
+            phone: true,
+            designation: true,
+            address: true,
+            accountSetupAt: true,
+          },
+        },
         tokens: { orderBy: { createdAt: 'desc' } },
         tokenRequests: { orderBy: { requestedAt: 'desc' } },
         commLogs: { orderBy: { createdAt: 'desc' }, take: 100 },

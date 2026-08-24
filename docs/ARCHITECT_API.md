@@ -5,8 +5,9 @@ handshake + token flow. Every call is testable from Postman — import
 `postman/CIDCO-Architect-Handshake.postman_collection.json`.
 
 The CIDCO officer manages the other side from the admin dashboard (`/`, the "CIDCO Admin" tabs):
-issuing credentials, generating tokens, approving renewal requests, and watching the communication
-log. **Architects do not get a dashboard — they use these endpoints from Postman.**
+issuing credentials, approving validation requests, approving token requests, and watching the
+communication log. Architects have their own dashboard at **`/architect`**, where CIDCO's messages —
+including the tokens and the endpoint URLs — are delivered.
 
 All responses share one envelope:
 
@@ -23,34 +24,48 @@ Base URL below is written as `{{baseUrl}}` (e.g. `http://localhost:3000`).
 
 | # | Who | Action | Endpoint |
 |---|-----|--------|----------|
-| 1 | CIDCO | Issues you a credential `{clientId, clientSecret, expiryDate}` | (admin dashboard) |
-| 2 | You | Validate with credentials **+ IP + device info** → CIDCO whitelists you and returns **both tokens** | `POST /api/architect/validate` |
-| 3 | You | Send AQI data with the access token, automated every 3 h | `POST /api/architect/data` |
-| 4 | You | Access token expired (503) → renew it with the refresh token | `POST /api/architect/refresh` |
-| 5 | You | Refresh token expired (503) → start again from step 2 | `POST /api/architect/validate` |
+| 1 | CIDCO | Emails you a user id and password: `{clientId, clientSecret, expiryDate}` | (admin dashboard) |
+| 2 | You | Present those credentials **+ IP + device info** → queued for CIDCO approval (**202**) | `POST /api/architect/validate` |
+| 3 | CIDCO | An officer checks you, your IP and your device, then approves | (admin dashboard) |
+| 4 | CIDCO | Delivers your **access + refresh tokens and every endpoint URL** as a message | `/architect` → Messages |
+| 5 | You | Create your own username and password and fill in your details | `POST /api/architect/register` |
+| 6 | You | Send AQI data with the access token, automated every 3 h | `POST /api/architect/data` |
+| 7 | You | Access token expired (503) → ask CIDCO for a new one with your refresh token | `POST /api/architect/token-requests` |
+| 8 | You | Refresh token expired too (503) → start again from step 2 | `POST /api/architect/validate` |
 | — | You | Check status / read the log any time | `GET /api/architect/status`, `GET /api/architect/logs` |
 
 ---
 
 ## 0. The credential CIDCO sends you
 
-CIDCO issues this JSON out of band. The `clientSecret` is shown only once — store it securely.
+CIDCO emails this out of band. It is only a user id, a password and an expiry date — the endpoint
+URLs are in this document, and CIDCO repeats them in the message it delivers with your tokens, so
+you can copy them straight from your dashboard. The `clientSecret` is shown only once — store it
+securely.
 
 ```json
 {
   "clientId": "ARCH-582397C8A863",
   "clientSecret": "hs_sec_50fda6539cf711974dc4e983c86ae95a...",
-  "expiryDate": "2026-09-13T07:00:39.540Z",
-  "validateUrl": "{{baseUrl}}/api/architect/validate",
-  "tokenRequestUrl": "{{baseUrl}}/api/architect/token-requests",
-  "dataUrl": "{{baseUrl}}/api/architect/data",
-  "logsUrl": "{{baseUrl}}/api/architect/logs"
+  "expiryDate": "2026-09-13T07:00:39.540Z"
 }
 ```
 
+The endpoints you will need:
+
+| Purpose | Endpoint |
+|---------|----------|
+| Present your credentials | `POST {{baseUrl}}/api/architect/validate` |
+| Create your own login after approval | `POST {{baseUrl}}/api/architect/register` |
+| Check where your validation stands | `POST {{baseUrl}}/api/architect/handshake-status` |
+| Send AQI data | `POST {{baseUrl}}/api/architect/data` |
+| Ask for a new access token | `POST {{baseUrl}}/api/architect/token-requests` |
+| Your exchange log | `GET {{baseUrl}}/api/architect/logs` |
+| Your dashboard | `{{baseUrl}}/architect` |
+
 ---
 
-## 1. Validate — establish the channel and receive both tokens
+## 1. Validate — present your credentials for CIDCO approval
 
 `POST /api/architect/validate`
 
@@ -66,23 +81,22 @@ Send the credentials **plus the IP address and device info** you want CIDCO to w
 ```
 
 `ipAddress` and `deviceInfo` are optional — if you omit `ipAddress`, CIDCO uses the IP the request
-arrived from. On your **first** successful validate CIDCO whitelists that IP/device; afterwards every
-call (validate, refresh, data) must come from the same IP or it is refused.
+arrived from. Once CIDCO whitelists that IP/device, every later call (validate, token request, data)
+must come from the same IP or it is refused.
 
-- **200 OK** — validated. The handshake becomes `ESTABLISHED` and CIDCO returns **both tokens**:
+**No tokens are issued here.** The request is queued on the CIDCO dashboard so an officer can see
+who you are, which IP you are calling from and which device you are using.
+
+- **202 Accepted** — your request is with CIDCO, awaiting approval:
 
 ```jsonc
 {
   "success": true,
   "data": {
-    "established": true,
-    "accessToken": "cidco_tok_…",     // use this to send data
-    "refreshToken": "cidco_ref_…",    // use this to renew the access token
-    "expiresInDays": 7,
-    "refreshExpiresInDays": 30,
-    "accessTokenExpiresAt": "...",
-    "refreshTokenExpiresAt": "...",
-    "whitelistedIp": "203.0.113.9",
+    "message": "Credentials accepted and sent to CIDCO for approval. …",
+    "status": "AWAITING_APPROVAL",
+    "requestId": "…",
+    "presentedIp": "203.0.113.9",
     "deviceInfo": "RaspberryPi-4 | station STN-KHR-07"
   }
 }
@@ -91,11 +105,64 @@ call (validate, refresh, data) must come from the same IP or it is refused.
 - **504 Gateway Timeout** — validation failed (unknown `clientId`, wrong secret, expired/revoked
   credential, or a non-whitelisted IP). In the CIDCO protocol **504 means "handshake not validated."**
 
-Store both tokens. Each validate issues a fresh pair and **revokes the previous one**, so only one
-pair is ever live.
+### 1a. Check where your request stands
+
+`POST /api/architect/handshake-status` with `{clientId, clientSecret}` — works before you have a
+portal account:
+
+```jsonc
+{
+  "status": "ESTABLISHED",
+  "approved": true,
+  "needsAccountSetup": true,      // you still have to choose a username and password
+  "accountEmail": null,
+  "latestRequest": { "status": "APPROVED", "presentedIp": "203.0.113.9", "reviewedAt": "…" }
+}
+```
+
+### 1b. What approval delivers
+
+When the officer approves, CIDCO generates the pair and puts it on your dashboard at `/architect` →
+**Messages**, together with all the endpoint URLs, ready to copy:
+
+- access token — send AQI data with it (7 days by default)
+- refresh token — ask for a new access token with it (30 days by default)
+
+Each approval issues a fresh pair and **revokes the previous one**, so only one pair is ever live.
 
 > The expiry windows (7 / 30 days by default) are set by CIDCO per architect from its dashboard, so
-> the values you receive may differ — always read `expiresInDays` / `refreshExpiresInDays`.
+> the values you receive may differ — always read the expiry dates in the message.
+
+---
+
+## 2. Create your own login
+
+`POST /api/architect/register` — after CIDCO approves you, swap the CIDCO-issued credentials for a
+username and password of your own, and fill in the details CIDCO will see against you.
+
+```json
+{
+  "clientId": "ARCH-582397C8A863",
+  "clientSecret": "hs_sec_...",
+  "email": "rhea@nairdesign.in",
+  "password": "your-own-password",
+  "name": "Ar. Rhea Nair",
+  "firmName": "Nair Design Studio",
+  "councilRegNo": "CA/2019/12345",
+  "phone": "+91 98200 11223",
+  "designation": "Principal Architect",
+  "address": "Plot 7, Sector 15, CBD Belapur"
+}
+```
+
+- **201 Created** — the account is set up and you are signed in to `/architect`. Everything you
+  entered here appears on the CIDCO dashboard under **Architect Handshakes → Manage**.
+- **409** — CIDCO has not approved you yet, or that username is already taken.
+- **504** — the CIDCO-issued credentials did not verify.
+
+Only `email`, `password` and `name` are required; the rest are optional but CIDCO expects them.
+On the dashboard this is the same form you get after approval — the API is there so the whole flow
+is testable from Postman.
 
 ---
 
@@ -278,8 +345,9 @@ x-client-secret: hs_sec_...
 
 | Code | Meaning |
 |------|---------|
-| 200 | Validation succeeded / access token renewed / read OK |
-| 201 | Data stored |
+| 200 | Read OK |
+| 201 | Data stored / your account created |
+| **202** | **Accepted and queued for a CIDCO officer** (validate, token request) |
 | 401 | Token missing, unknown or revoked |
 | 403 | Request came from a non-whitelisted IP |
 | 409 | Handshake not established yet — validate first |
@@ -293,9 +361,9 @@ x-client-secret: hs_sec_...
 
 | | Trigger | CIDCO responds | You do |
 |---|---|---|---|
-| **CASE 1** | First-time setup | 200 + access & refresh tokens, IP/device whitelisted | Store both, send data every 3 h |
-| **CASE 2** | Access token expired | **503** `ACCESS_EXPIRED` | `POST /refresh` with refresh token → new access token |
-| **CASE 3** | Refresh token expired (access token irrelevant) | **503** `BOTH_EXPIRED` | `POST /validate` with clientId + clientSecret → new pair |
+| **CASE 1** | First-time setup | **202**, then an officer approves and delivers access + refresh tokens to your dashboard, IP/device whitelisted | Save both, send data every 3 h |
+| **CASE 2** | Access token expired | **503** `ACCESS_EXPIRED`, with your unsent reading echoed back | `POST /token-requests` with your refresh token → CIDCO delivers a new access token |
+| **CASE 3** | Refresh token expired (access token irrelevant) | **503** `BOTH_EXPIRED` | `POST /validate` with clientId + clientSecret → officer approves → new pair |
 
 ---
 
@@ -305,20 +373,28 @@ x-client-secret: hs_sec_...
 BASE=http://localhost:3000
 CID=ARCH-XXXX; SECRET=hs_sec_XXXX          # from the credential CIDCO sent you
 
-# 1. validate  → 200 + established (or 504 if wrong)
+# 1. present your credentials → 202 queued for CIDCO (or 504 if wrong)
 curl -s -X POST $BASE/api/architect/validate -H 'content-type: application/json' \
+  -d "{\"clientId\":\"$CID\",\"clientSecret\":\"$SECRET\",\"deviceInfo\":\"RaspberryPi-4 | STN-KHR-07\"}"
+
+# 1a. poll until CIDCO approves
+curl -s -X POST $BASE/api/architect/handshake-status -H 'content-type: application/json' \
   -d "{\"clientId\":\"$CID\",\"clientSecret\":\"$SECRET\"}"
 
-# 2. CIDCO gives you a token; then send data
+# 2. once approved, create your own login (details land on the CIDCO dashboard)
+curl -s -X POST $BASE/api/architect/register -H 'content-type: application/json' \
+  -d "{\"clientId\":\"$CID\",\"clientSecret\":\"$SECRET\",\"email\":\"you@firm.in\",\"password\":\"your-own-password\",\"name\":\"Ar. Your Name\",\"firmName\":\"Your Studio\"}"
+
+# 3. take the access token from /architect → Messages, then send data
 TOKEN=cidco_tok_XXXX
 curl -s -X POST $BASE/api/architect/data -H "Authorization: Bearer $TOKEN" \
   -H 'content-type: application/json' \
   -d '{"siteName":"Kharghar Sector 12 Site","location":"Kharghar, Navi Mumbai","measuredAt":"2026-08-12T09:30:00Z","aqiValue":168}'
 
-# 3. renewal request when the token nears expiry
+# 4. renewal request when the access token expires (CASE 2)
 curl -s -X POST $BASE/api/architect/token-requests -H 'content-type: application/json' \
-  -d "{\"clientId\":\"$CID\",\"clientSecret\":\"$SECRET\",\"reason\":\"expiring soon\"}"
+  -d "{\"clientId\":\"$CID\",\"clientSecret\":\"$SECRET\",\"refreshToken\":\"cidco_ref_XXXX\",\"reason\":\"access token expired\"}"
 
-# 4. your logs, any time
+# 5. your logs, any time
 curl -s $BASE/api/architect/logs -H "x-client-id: $CID" -H "x-client-secret: $SECRET"
 ```
