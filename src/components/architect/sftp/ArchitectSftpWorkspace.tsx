@@ -2,114 +2,63 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import ArchitectSignIn, { type Architect } from '../ArchitectSignIn';
+import FileTransferPanes from './FileTransferPanes';
 
 /**
- * The architect's SFTP workspace: where to connect, what the sheet must look
- * like, and what CIDCO made of everything they have uploaded.
+ * The architect's SFTP workspace.
  *
- * Uploading itself happens over SFTP from their own machine — that is the point
- * of the channel — so this page equips and reports, it does not transfer.
+ * Their registration as CIDCO holds it, a WinSCP-style pair of panes for
+ * sending by hand, and CIDCO's validation result for every transfer so far.
  */
 type Upload = {
   id: string;
   fileName: string;
   sizeBytes: number;
   status: string;
-  sheetName: string | null;
+  mode: string;
   rowCount: number;
   importedCount: number;
   failedCount: number;
   errors: Array<{ row: number; error: string }> | null;
   receivedAt: string;
   parsedAt: string | null;
+  presentedCompanyId: string | null;
+  presentedIp: string | null;
+  presentedPath: string | null;
+  companyIdMatch: boolean;
+  ipMatch: boolean;
+  pathMatch: boolean;
+  validationPassed: boolean;
+  rejectionReason: string | null;
 };
 
 type Account = {
   id: string;
   username: string;
-  passwordPrefix: string;
   status: string;
   credentialExpiresAt: string;
   establishedAt: string | null;
-  whitelistedIp: string | null;
-  deviceInfo: string | null;
+  company: {
+    companyId: string;
+    companyName: string;
+    architectServerIp: string;
+    filePath: string;
+    active: boolean;
+  } | null;
   uploads: Upload[];
   commLogs: Array<{
     id: string; direction: string; event: string; statusCode: number | null;
     detail: string | null; ip: string | null; createdAt: string;
   }>;
-  validationRequests: Array<{
-    id: string; status: string; presentedIp: string | null; deviceInfo: string | null;
-    reviewNote: string | null; createdAt: string; reviewedAt: string | null;
-  }>;
 };
 
 type MeData = {
   architect: { id: string; name: string; email: string; firmName: string | null };
-  endpoint: { host: string; port: number; uploadDir: string; fileTypes: string; protocol: string };
+  endpoint: { designatedIp: string; host: string; port: number; fileTypes: string; protocol: string };
   accounts: Account[];
 };
 
 const fmt = (d: string | null) => (d ? new Date(d).toLocaleString('en-IN') : '—');
-const kb = (n: number) => `${(n / 1024).toFixed(1)} KB`;
-
-const STATUS_NOTE: Record<string, { tone: string; text: string }> = {
-  PENDING: {
-    tone: 'border-amber-200 bg-amber-50 text-amber-900',
-    text: 'Connect to the SFTP server once with the user id and password CIDCO emailed you. That first connection is your handshake request — it will be refused, and CIDCO will see it for approval.',
-  },
-  AWAITING_APPROVAL: {
-    tone: 'border-amber-200 bg-amber-50 text-amber-900',
-    text: 'Your handshake request is with CIDCO. Once an officer approves the address you connected from, your uploads will be accepted.',
-  },
-  ESTABLISHED: {
-    tone: 'border-emerald-200 bg-emerald-50 text-emerald-900',
-    text: 'Your channel is open. Upload your filled-in workbook to the upload directory and CIDCO will parse it into readings.',
-  },
-  REJECTED: {
-    tone: 'border-red-200 bg-red-50 text-red-900',
-    text: 'CIDCO did not approve this handshake request. Check the note below and confirm your details with CIDCO before trying again.',
-  },
-  EXPIRED: {
-    tone: 'border-red-200 bg-red-50 text-red-900',
-    text: 'These SFTP credentials have expired. Ask CIDCO to issue a new user id and password.',
-  },
-  REVOKED: {
-    tone: 'border-red-200 bg-red-50 text-red-900',
-    text: 'CIDCO has revoked these SFTP credentials.',
-  },
-};
-
-const UPLOAD_TONE: Record<string, string> = {
-  RECEIVED: 'bg-slate-100 text-slate-700',
-  PARSED: 'bg-emerald-100 text-emerald-800',
-  PARTIAL: 'bg-amber-100 text-amber-800',
-  FAILED: 'bg-red-100 text-red-800',
-};
-
-function Copyable({ label, value }: { label: string; value: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <div className="flex items-center gap-2">
-      <span className="w-28 flex-none text-xs text-slate-500">{label}</span>
-      <code className="min-w-0 flex-1 truncate rounded bg-slate-50 px-2 py-1 font-mono text-xs text-slate-800">{value}</code>
-      <button
-        onClick={async () => {
-          try {
-            await navigator.clipboard.writeText(value);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1500);
-          } catch {
-            setCopied(false);
-          }
-        }}
-        className="text-xs font-semibold text-violet-700 hover:underline"
-      >
-        {copied ? 'Copied ✓' : 'Copy'}
-      </button>
-    </div>
-  );
-}
 
 export default function ArchitectSftpWorkspace() {
   const [me, setMe] = useState<MeData | null>(null);
@@ -133,10 +82,10 @@ export default function ArchitectSftpWorkspace() {
     })();
   }, [reload]);
 
-  // Approval and uploads both happen off-browser, so keep the page current.
+  // The automated feed delivers outside the browser, so keep this current.
   useEffect(() => {
     if (!me) return;
-    timer.current = setInterval(() => void reload(), 6000);
+    timer.current = setInterval(() => void reload(), 8000);
     return () => {
       if (timer.current) clearInterval(timer.current);
     };
@@ -170,12 +119,12 @@ export default function ArchitectSftpWorkspace() {
 
   return (
     <main className="flex-1 overflow-y-auto bg-slate-50 p-8">
-      <div className="mx-auto w-full max-w-4xl space-y-6">
+      <div className="mx-auto w-full max-w-6xl space-y-6">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-slate-900">SFTP file transfer</h1>
             <p className="mt-1 text-sm text-slate-500">
-              Upload a filled-in Excel workbook of AQI readings to CIDCO over SFTP.
+              Send your AQI readings to CIDCO as a CSV, by hand or automatically.
             </p>
           </div>
           <div className="text-right">
@@ -188,110 +137,162 @@ export default function ArchitectSftpWorkspace() {
 
         {!account ? (
           <div className="rounded-xl border border-slate-200 bg-white p-8 text-center shadow-sm">
-            <p className="text-sm font-medium text-slate-900">No SFTP account yet</p>
-            <p className="mx-auto mt-2 max-w-md text-sm text-slate-500">
-              CIDCO issues an SFTP user id and password and emails it to you. Once you have it, connect
-              to the server below — that first connection is your handshake request.
+            <p className="text-sm font-medium text-slate-900">No SFTP credentials yet</p>
+            <p className="mx-auto mt-2 max-w-lg text-sm text-slate-500">
+              CIDCO registers your company first — the company id, your server address and the path your
+              CSV is exported to — and then emails you a user id, a password and the address to send to.
+              Once that arrives, this page is where you send.
             </p>
+          </div>
+        ) : !account.company ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">
+            These credentials are not linked to a company registration, so CIDCO will refuse every
+            transfer. Ask CIDCO to link them before sending.
           </div>
         ) : (
           <>
-            {/* Where the handshake stands */}
-            {(() => {
-              const note = STATUS_NOTE[account.status] ?? STATUS_NOTE.PENDING;
-              const rejected = account.validationRequests.find((v) => v.status === 'REJECTED');
-              return (
-                <div className={`rounded-xl border p-5 ${note.tone}`}>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="rounded-full bg-white/70 px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wide">
-                      {account.status}
-                    </span>
-                    <span className="font-mono text-xs opacity-75">{account.username}</span>
-                  </div>
-                  <p className="mt-2 text-sm leading-relaxed">{note.text}</p>
-                  {account.status === 'REJECTED' && rejected?.reviewNote && (
-                    <p className="mt-2 text-sm font-medium">CIDCO’s note: {rejected.reviewNote}</p>
-                  )}
-                  {account.whitelistedIp && (
-                    <p className="mt-2 text-xs opacity-75">
-                      Approved for connections from {account.whitelistedIp}
-                      {account.establishedAt ? ` · open since ${fmt(account.establishedAt)}` : ''}
-                    </p>
-                  )}
-                </div>
-              );
-            })()}
-
-            {/* How to connect */}
-            <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-              <h2 className="text-sm font-semibold text-slate-900">Connection details</h2>
-              <p className="mt-1 text-xs text-slate-500">
-                Use any SFTP client — FileZilla, WinSCP, or the <code className="font-mono">sftp</code> command.
-                Your password is the one CIDCO emailed you.
-              </p>
-              <div className="mt-4 space-y-2">
-                <Copyable label="Protocol" value={ep.protocol} />
-                <Copyable label="Host" value={ep.host} />
-                <Copyable label="Port" value={String(ep.port)} />
-                <Copyable label="User id" value={account.username} />
-                <Copyable label="Upload to" value={ep.uploadDir} />
-                <Copyable
-                  label="Command"
-                  value={`sftp -P ${ep.port} ${account.username}@${ep.host}`}
-                />
+            {/* What CIDCO holds — and therefore what every transfer must match */}
+            <div className="rounded-xl border border-violet-200 bg-violet-50 p-5">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-semibold text-violet-900">{account.company.companyName}</span>
+                <span className="rounded bg-white/70 px-2 py-0.5 font-mono text-xs text-violet-800">
+                  {account.company.companyId}
+                </span>
+                {!account.company.active && (
+                  <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-800">INACTIVE</span>
+                )}
               </div>
-              <p className="mt-3 text-xs text-slate-500">
-                Once connected: <code className="font-mono">put your-readings.xlsx {ep.uploadDir}/</code>. Only{' '}
-                {ep.fileTypes} are accepted.{' '}
-                <a href="/docs/sftp" target="_blank" rel="noreferrer" className="font-semibold text-violet-700 hover:underline">
-                  Full SFTP guide →
-                </a>
+              <p className="mt-2 text-sm text-violet-900">
+                CIDCO validates every transfer against this registration. All three have to match or
+                nothing is stored.
               </p>
+              <dl className="mt-3 grid gap-3 text-xs sm:grid-cols-3">
+                <div>
+                  <dt className="font-semibold uppercase tracking-wide text-violet-700">Your server IP</dt>
+                  <dd className="mt-0.5 font-mono text-sm text-violet-950">{account.company.architectServerIp}</dd>
+                </div>
+                <div>
+                  <dt className="font-semibold uppercase tracking-wide text-violet-700">File path</dt>
+                  <dd className="mt-0.5 break-all font-mono text-sm text-violet-950">{account.company.filePath}</dd>
+                </div>
+                <div>
+                  <dt className="font-semibold uppercase tracking-wide text-violet-700">Send to</dt>
+                  <dd className="mt-0.5 font-mono text-sm text-violet-950">
+                    {ep.designatedIp}:{ep.port}
+                  </dd>
+                </div>
+              </dl>
             </div>
 
-            {/* The sheet */}
+            {/* WinSCP-style transfer */}
+            <FileTransferPanes
+              username={account.username}
+              designatedIp={ep.designatedIp}
+              port={ep.port}
+              registeredPath={account.company.filePath}
+              delivered={account.uploads}
+              onTransferred={reload}
+            />
+
+            {/* The automated route */}
             <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <h2 className="text-sm font-semibold text-slate-900">The workbook</h2>
-                  <p className="mt-1 text-xs text-slate-500">
-                    Row 1 is the header, every row after it is one reading. Start from the template and the
-                    columns will always line up.
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h2 className="text-sm font-semibold text-slate-900">Sending automatically</h2>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                    On your own server, point any SFTP client at the designated address with your user
+                    id and password, and put the CSV from{' '}
+                    <code className="font-mono">{account.company.filePath}</code> on a schedule:
+                  </p>
+                  <pre className="mt-2 overflow-x-auto rounded-lg bg-slate-900 p-3 font-mono text-[11px] leading-relaxed text-slate-100">
+{`sftp -P ${ep.port} ${account.username}@${ep.designatedIp}
+sftp> put ${account.company.filePath}/readings.csv ${account.company.filePath}/`}
+                  </pre>
+                  <p className="mt-2 text-xs text-slate-500">
+                    The repo ships a ready-made sender —{' '}
+                    <code className="font-mono">npx tsx scripts/architect-sender.ts</code> — that reads
+                    the newest CSV from that path and sends it on an interval.
                   </p>
                 </div>
-                <a
-                  href="/api/architect/sftp/template"
-                  className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-700"
-                >
-                  Download the template
-                </a>
+                <div className="flex flex-none flex-col gap-2">
+                  <a
+                    href="/api/architect/sftp/template"
+                    className="rounded-lg bg-violet-600 px-4 py-2 text-center text-sm font-semibold text-white hover:bg-violet-700"
+                  >
+                    CSV template
+                  </a>
+                  <a
+                    href="/api/architect/sftp/template?format=xlsx"
+                    className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-center text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    Excel template
+                  </a>
+                  <a
+                    href="/docs/sftp"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-center text-xs font-semibold text-violet-700 hover:underline"
+                  >
+                    Full SFTP guide →
+                  </a>
+                </div>
               </div>
             </div>
 
-            {/* What CIDCO made of each upload */}
+            {/* Per-transfer validation, as CIDCO ran it */}
             <div>
-              <h2 className="text-sm font-semibold text-slate-900">Your uploads</h2>
+              <h2 className="text-sm font-semibold text-slate-900">Your transfers</h2>
               {account.uploads.length === 0 ? (
                 <div className="mt-3 rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500 shadow-sm">
-                  Nothing uploaded yet. Once you put a workbook on the server it appears here with CIDCO’s
-                  result for every row.
+                  Nothing sent yet. Every transfer will show here with CIDCO’s validation result.
                 </div>
               ) : (
                 <div className="mt-3 space-y-3">
                   {account.uploads.map((u) => (
-                    <div key={u.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <div
+                      key={u.id}
+                      className={`rounded-xl border p-4 shadow-sm ${
+                        u.validationPassed ? 'border-slate-200 bg-white' : 'border-red-200 bg-red-50'
+                      }`}
+                    >
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="font-medium text-slate-900">{u.fileName}</span>
-                        <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${UPLOAD_TONE[u.status] ?? 'bg-slate-100 text-slate-700'}`}>
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                            u.validationPassed ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'
+                          }`}
+                        >
                           {u.status}
+                        </span>
+                        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                          {u.mode === 'PORTAL' ? 'portal' : 'sftp'}
                         </span>
                         <span className="ml-auto text-xs text-slate-400">{fmt(u.receivedAt)}</span>
                       </div>
-                      <p className="mt-1.5 text-xs text-slate-600">
-                        {kb(u.sizeBytes)} · <span className="font-semibold text-slate-900">{u.importedCount}</span> of{' '}
-                        {u.rowCount} rows stored as readings
-                        {u.failedCount > 0 ? ` · ${u.failedCount} rejected` : ''}
+
+                      <p className="mt-2 flex flex-wrap gap-3 text-[11px]">
+                        <span className={u.companyIdMatch ? 'text-emerald-700' : 'text-red-700'}>
+                          {u.companyIdMatch ? '✓' : '✕'} company id {u.presentedCompanyId ?? '—'}
+                        </span>
+                        <span className={u.ipMatch ? 'text-emerald-700' : 'text-red-700'}>
+                          {u.ipMatch ? '✓' : '✕'} from {u.presentedIp ?? '—'}
+                        </span>
+                        <span className={u.pathMatch ? 'text-emerald-700' : 'text-red-700'}>
+                          {u.pathMatch ? '✓' : '✕'} path {u.presentedPath ?? '—'}
+                        </span>
                       </p>
+
+                      {u.validationPassed ? (
+                        <p className="mt-1.5 text-xs text-slate-600">
+                          <span className="font-semibold text-slate-900">{u.importedCount}</span> of {u.rowCount} rows
+                          stored as readings{u.failedCount > 0 ? ` · ${u.failedCount} rejected` : ''}
+                        </p>
+                      ) : (
+                        <p className="mt-1.5 text-xs font-medium text-red-800">
+                          CIDCO refused this transfer — {u.rejectionReason}. Nothing was stored.
+                        </p>
+                      )}
+
                       {u.errors && u.errors.length > 0 && (
                         <ul className="mt-2 space-y-1 rounded-lg bg-amber-50 p-3 text-xs text-amber-900">
                           {u.errors.map((e) => (
@@ -307,7 +308,6 @@ export default function ArchitectSftpWorkspace() {
               )}
             </div>
 
-            {/* The exchange, as CIDCO recorded it */}
             {account.commLogs.length > 0 && (
               <div>
                 <h2 className="text-sm font-semibold text-slate-900">Activity</h2>

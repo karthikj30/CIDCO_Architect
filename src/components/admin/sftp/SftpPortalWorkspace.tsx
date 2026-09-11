@@ -3,14 +3,15 @@
 import { useEffect, useState } from 'react';
 import AdminSignIn from '../AdminSignIn';
 import SftpAccountsPanel from './SftpAccountsPanel';
-import SftpRequestsPanel from './SftpRequestsPanel';
+import SftpCompaniesPanel from './SftpCompaniesPanel';
 import SftpUploadsPanel from './SftpUploadsPanel';
 
 /**
- * CIDCO's SFTP workspace. Deliberately narrow: accounts, the handshake queue,
- * and the workbooks that have arrived. The API channel lives at /cidco.
+ * CIDCO's SFTP workspace: the company register, the credentials issued against
+ * it, and every transfer that has arrived with its validation result. The API
+ * channel lives at /cidco.
  */
-type Tab = 'uploads' | 'requests' | 'accounts';
+type Tab = 'uploads' | 'companies' | 'accounts';
 type AdminUser = { id: string; name: string; email: string; role: string };
 
 function NavButton({
@@ -62,11 +63,11 @@ export default function SftpPortalWorkspace() {
         <nav className="flex-1 space-y-1 overflow-y-auto p-4">
           <NavButton active={tab === 'uploads'} onClick={() => setTab('uploads')}>
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
-            Delivered workbooks
+            Delivered transfers
           </NavButton>
-          <NavButton active={tab === 'requests'} onClick={() => setTab('requests')}>
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 12l2 2 4-4"></path><path d="M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9c1.66 0 3.22.45 4.56 1.24"></path></svg>
-            Handshake requests
+          <NavButton active={tab === 'companies'} onClick={() => setTab('companies')}>
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 21h18"></path><path d="M5 21V7l7-4 7 4v14"></path><path d="M9 21v-6h6v6"></path></svg>
+            Companies
           </NavButton>
           <NavButton active={tab === 'accounts'} onClick={() => setTab('accounts')}>
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
@@ -100,7 +101,7 @@ export default function SftpPortalWorkspace() {
         ) : (
           <>
             {tab === 'uploads' && <SftpUploadsPanel />}
-            {tab === 'requests' && <SftpRequestsPanel />}
+            {tab === 'companies' && <SftpCompaniesPanel />}
             {tab === 'accounts' && <SftpAccountsPanel />}
           </>
         )}

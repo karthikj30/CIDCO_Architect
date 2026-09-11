@@ -76,6 +76,18 @@
     {
       "key": "sftpUploadId",
       "value": ""
+    },
+    {
+      "key": "companyId",
+      "value": "CIDCO-CO-0142"
+    },
+    {
+      "key": "companyRecordId",
+      "value": ""
+    },
+    {
+      "key": "sftpDesignatedIp",
+      "value": "localhost"
     }
   ],
   "item": [
@@ -849,21 +861,20 @@
     },
     {
       "name": "SFTP channel (CIDCO officer)",
-      "description": "The SFTP channel is driven from an SFTP client, not from Postman \u2014 the upload itself is a file transfer. These are the officer-side endpoints behind the CIDCO SFTP dashboard. See docs/SFTP_CHANNEL.md.",
+      "description": "The SFTP channel. CIDCO registers the company by hand FIRST, then issues credentials against it, and every transfer is validated against that registration. The transfer itself is a file transfer, not HTTP \u2014 drive it with scripts/architect-sender.ts or any SFTP client. See docs/SFTP_CHANNEL.md.",
       "item": [
         {
-          "name": "Issue SFTP credentials",
+          "name": "i. Register the company",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('issued', () => pm.response.to.have.status(201));",
-                  "const c = pm.response.json().data.credential;",
-                  "pm.collectionVariables.set('sftpUsername', c.username);",
-                  "pm.collectionVariables.set('sftpPassword', c.password);",
-                  "console.log(`sftp -P ${c.port} ${c.username}@${c.host}`);"
+                  "pm.test('registered', () => pm.response.to.have.status(201));",
+                  "const co = pm.response.json().data.company;",
+                  "pm.collectionVariables.set('companyRecordId', co.id);",
+                  "console.log(`${co.companyName} (${co.companyId}) accepts data from ${co.architectServerIp} at ${co.filePath}`);"
                 ]
               }
             }
@@ -878,7 +889,101 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"architectEmail\": \"{{architectEmail}}\",\n  \"expiresInDays\": 30\n}"
+              "raw": "{\n  \"companyName\": \"Nair Design Studio\",\n  \"companyId\": \"{{companyId}}\",\n  \"architectServerIp\": \"127.0.0.1\",\n  \"filePath\": \"/var/aqi/exports\",\n  \"architectEmail\": \"{{architectEmail}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/sftp/companies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "sftp",
+                "companies"
+              ]
+            },
+            "description": "Step one, done by hand before any credentials exist. What you enter here is what every later transfer is validated against: the company id quoted, the address the data must arrive from, and the path it is taken from."
+          }
+        },
+        {
+          "name": "List the company register",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/sftp/companies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "sftp",
+                "companies"
+              ]
+            },
+            "description": "Every registration, with the credentials issued against each one."
+          }
+        },
+        {
+          "name": "Correct a registration",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"architectServerIp\": \"203.0.113.9\",\n  \"filePath\": \"/var/aqi/exports\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/sftp/companies/{{companyRecordId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "sftp",
+                "companies",
+                "{{companyRecordId}}"
+              ]
+            },
+            "description": "Fix a registration \u2014 the architect moved server, or their export path changed. Applies to the very next transfer. Send {\"active\": false} to stop their transfers entirely."
+          }
+        },
+        {
+          "name": "1. Issue SFTP credentials",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('issued', () => pm.response.to.have.status(201));",
+                  "const c = pm.response.json().data.credential;",
+                  "pm.collectionVariables.set('sftpUsername', c.username);",
+                  "pm.collectionVariables.set('sftpPassword', c.password);",
+                  "console.log(`sftp -P ${c.port} ${c.username}@${c.designatedIp}  # then: put readings.csv ${c.filePath}/`);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"companyId\": \"{{companyId}}\",\n  \"expiresInDays\": 365\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/admin/sftp/accounts",
@@ -892,7 +997,7 @@
                 "accounts"
               ]
             },
-            "description": "Issues an SFTP user id and password for an architect. The password is returned once \u2014 email it over, with the host and port."
+            "description": "Step two: issue a user id and password against the registration. The response is exactly what the officer emails over \u2014 the login plus the designated IP to send to. The password is shown once."
           }
         },
         {
@@ -912,119 +1017,11 @@
                 "accounts"
               ]
             },
-            "description": "Every SFTP account, its handshake status, whitelisted address and upload count."
+            "description": "Every SFTP user id, the company registration behind it, and what it has delivered."
           }
         },
         {
-          "name": "Handshake queue",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('listed', () => pm.response.to.have.status(200));",
-                  "const rows = pm.response.json().data.requests;",
-                  "const mine = rows.find(r => r.handshake.clientId === pm.collectionVariables.get('sftpUsername'));",
-                  "if (mine) pm.collectionVariables.set('sftpRequestId', mine.id);"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/admin/sftp/validation-requests?status=PENDING",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "admin",
-                "sftp",
-                "validation-requests?status=PENDING"
-              ]
-            },
-            "description": "Architects whose first SFTP connection verified and who are waiting to be approved. The server refuses their sessions until one of these is approved."
-          }
-        },
-        {
-          "name": "Approve the handshake",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('approved', () => pm.response.to.have.status(200));",
-                  "console.log(pm.response.json().data.message);"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/api/admin/sftp/validation-requests/{{sftpRequestId}}/approve",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "admin",
-                "sftp",
-                "validation-requests",
-                "{{sftpRequestId}}",
-                "approve"
-              ]
-            },
-            "description": "Whitelists the address the architect connected from and opens the channel. No tokens are involved \u2014 this channel authenticates with the user id and password on every connection."
-          }
-        },
-        {
-          "name": "Reject the handshake",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"reviewNote\": \"Connection did not come from the registered site\"\n}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/api/admin/sftp/validation-requests/{{sftpRequestId}}/reject",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "admin",
-                "sftp",
-                "validation-requests",
-                "{{sftpRequestId}}",
-                "reject"
-              ]
-            },
-            "description": "Refuses the request; the SFTP server keeps blocking that account."
-          }
-        },
-        {
-          "name": "Delivered workbooks",
+          "name": "Delivered transfers",
           "event": [
             {
               "listen": "test",
@@ -1053,11 +1050,11 @@
                 "uploads"
               ]
             },
-            "description": "Every Excel workbook architects have uploaded, with how many rows became readings."
+            "description": "Every transfer with its validation result \u2014 which of company id, IP and file path matched."
           }
         },
         {
-          "name": "Preview one workbook",
+          "name": "One transfer: validation + preview",
           "request": {
             "method": "GET",
             "header": [],
@@ -1074,7 +1071,57 @@
                 "{{sftpUploadId}}"
               ]
             },
-            "description": "The full sheet as it arrived \u2014 every column and row \u2014 plus the reason each rejected row was rejected."
+            "description": "The full comparison \u2014 incoming beside what CIDCO registered, field by field \u2014 and the file as it arrived, row by row. A transfer that failed validation stored nothing."
+          }
+        },
+        {
+          "name": "Send by hand (portal drag-and-drop)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/architect/sftp/transfer",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "architect",
+                "sftp",
+                "transfer"
+              ]
+            },
+            "description": "The portal's drag-and-drop send, validated exactly like a direct SFTP upload. In Postman set the body to form-data with: username, password, designatedIp, filePath, and file (type File \u2014 pick a .csv). Normally the architect does this by dragging a file on /architect/sftp.",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "username",
+                  "value": "{{sftpUsername}}",
+                  "type": "text"
+                },
+                {
+                  "key": "password",
+                  "value": "{{sftpPassword}}",
+                  "type": "text"
+                },
+                {
+                  "key": "designatedIp",
+                  "value": "{{sftpDesignatedIp}}",
+                  "type": "text"
+                },
+                {
+                  "key": "filePath",
+                  "value": "/var/aqi/exports",
+                  "type": "text"
+                },
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            }
           }
         }
       ]

@@ -15,12 +15,12 @@ Reports reach CIDCO through **two channels**:
 Both channels land in the same table and are reviewed by CIDCO officers in the same workflow.
 
 On top of those, an architect delivers their ongoing readings through one of **two integration
-channels**, each with its own credentials, its own dashboards and its own approval queue:
+channels**, each with its own credentials, its own dashboards and its own CIDCO-side gate:
 
 | Channel | Transport | Credentials | Docs |
 |---------|-----------|-------------|------|
 | **API** | REST over HTTPS, automated every few hours | client id + secret → access & refresh tokens | [`docs/ARCHITECT_API.md`](docs/ARCHITECT_API.md) |
-| **SFTP** | An Excel workbook uploaded over SFTP | SFTP user id + password | [`docs/SFTP_CHANNEL.md`](docs/SFTP_CHANNEL.md) |
+| **SFTP** | A CSV sent over SFTP, automatically | SFTP user id + password, issued against a registered company | [`docs/SFTP_CHANNEL.md`](docs/SFTP_CHANNEL.md) |
 
 The two never mix: an SFTP user id will not open the API, and an API client id will not open the
 SFTP server.
@@ -137,28 +137,49 @@ flow and saves the clientId, secret and token into collection variables automati
 
 ## Channel 2 — SFTP file transfer
 
-The architect uploads an **Excel workbook** of readings over SFTP instead of calling an API. CIDCO
-previews the sheet on its dashboard and imports the rows. Portals: CIDCO at `/cidco/sftp`, the
-architect at `/architect/sftp`.
+The architect's system exports a **CSV** of readings and sends it to CIDCO over SFTP, automatically.
+CIDCO validates every single transfer, previews the file and imports the rows. Portals: CIDCO at
+`/cidco/sftp`, the architect at `/architect/sftp`.
 
 **The flow**
 
-1. **CIDCO issues an SFTP user id and password** from *SFTP accounts* and emails it to the architect.
-2. **The architect connects** to the SFTP server with those credentials. This first connection *is*
-   the handshake request: the server verifies the credentials, records the IP address and SSH client,
-   and **refuses the session**. Nothing is accepted until CIDCO says so.
-3. **CIDCO reviews it** in *Handshake requests* — who, from which address, with which client — and
-   approves. That whitelists the address and opens the channel; later connections from anywhere else
-   are refused.
-4. **The architect uploads** their filled-in `.xlsx` into the upload directory. The moment the
-   transfer closes CIDCO stores the file, parses the sheet and imports every row as a reading.
-5. **CIDCO previews it** in *Delivered workbooks*: the sheet exactly as it arrived, next to what was
-   stored. Rows are independent — a bad row is named with its sheet row number and reason while the
-   rest still import, so the upload lands as `PARSED`, `PARTIAL` or `FAILED`.
+*Before any credentials exist:*
 
-The workbook's columns are the same AQI parameters as the API channel, and common alternative
-spellings (`PM 2.5`, `NO₂`, `AQI`, `Timestamp`, …) are accepted. Architects can download a ready-made
-template from their dashboard or `GET /api/architect/sftp/template`.
+- **i. CIDCO registers the company by hand** in *Companies*: company name, **company id**, the
+  **architect's server IP** (the only address data is accepted from) and the **file path** their CSV
+  is taken from. An architect account is linked to it.
+
+*Then:*
+
+1. **CIDCO issues credentials against that registration** and emails the architect a **user id**, a
+   **password** and the **designated IP** — CIDCO's own address, the one they send to.
+2. **The architect sends automatically.** Their server takes the CSV from the registered path and
+   puts it on the designated address, on a schedule. `scripts/architect-sender.ts` does exactly this;
+   any SFTP client or cron job works the same way.
+3. **CIDCO validates every transfer** before anything is stored. Three fields are compared against
+   the registration:
+
+   | Checked | Where it comes from |
+   | ------- | ------------------- |
+   | Company id | the registration behind the credentials used |
+   | Server IP | the address the connection actually came from |
+   | File path | the directory the file was written to |
+
+   Any mismatch and the transfer is **refused**: nothing is parsed, no reading is stored. It is still
+   recorded, marked `REJECTED`, with the failing field named. A connection from an unregistered
+   address never gets that far — it is refused at authentication.
+4. **CIDCO previews it** in *Delivered transfers*: the comparison field by field, incoming beside
+   registered, above the file as it arrived. Rows are independent — a bad row is named with its row
+   number and reason while the rest still import, so a transfer lands as `PARSED`, `PARTIAL`,
+   `FAILED` or `REJECTED`.
+
+There is **no separate approval step**: registering the company is CIDCO's manual gate, so the
+credentials work as soon as they are issued.
+
+**Sending by hand.** `/architect/sftp` also gives the architect a **WinSCP-style pair of panes** —
+their own files on the left (open a folder, browse it), CIDCO on the right at the registered path.
+They enter the user id, password and designated IP and drag a CSV across. Those transfers are marked
+`PORTAL` rather than `DIRECT_SFTP` and go through identical validation.
 
 **Running it.** The SFTP server is a separate process from the web app:
 
@@ -168,14 +189,14 @@ npm run sftp       # listens on SFTP_PORT, default 2222
 
 | Method | Path | Description |
 | ------ | ---- | ----------- |
-| `GET`/`POST` | `/api/admin/sftp/accounts` | List SFTP accounts / issue a user id + password (returned once) |
-| `GET` | `/api/admin/sftp/validation-requests` | The handshake approval queue |
-| `POST` | `/api/admin/sftp/validation-requests/:id/approve` | Whitelist the address and open the channel |
-| `POST` | `/api/admin/sftp/validation-requests/:id/reject` | Refuse it; the server keeps blocking them |
-| `GET` | `/api/admin/sftp/uploads` | Every delivered workbook |
-| `GET` | `/api/admin/sftp/uploads/:id` | One workbook: full sheet preview + per-row results |
-| `GET` | `/api/architect/sftp/me` | The architect's account, connection details and upload history |
-| `GET` | `/api/architect/sftp/template` | The blank workbook to fill in |
+| `GET`/`POST` | `/api/admin/sftp/companies` | The register / register a company (step i) |
+| `PATCH` | `/api/admin/sftp/companies/:id` | Correct a registration, or deactivate it |
+| `GET`/`POST` | `/api/admin/sftp/accounts` | SFTP accounts / issue credentials against a registration (step 1) |
+| `GET` | `/api/admin/sftp/uploads` | Every transfer, with its validation result |
+| `GET` | `/api/admin/sftp/uploads/:id` | One transfer: the full comparison and a file preview |
+| `GET` | `/api/architect/sftp/me` | The architect's registration, where to send, and every result |
+| `POST` | `/api/architect/sftp/transfer` | The portal's drag-and-drop send |
+| `GET` | `/api/architect/sftp/template` | The blank CSV (`?format=xlsx` for Excel) |
 
 Full guide: **`/docs/sftp`** (in-app) and **`docs/SFTP_CHANNEL.md`**.
 
@@ -255,6 +276,8 @@ npm run dev        # http://localhost:3000
 npm run sftp       # the SFTP intake, on port 2222 — a separate process
 ```
 
+`SFTP_PUBLIC_HOST` is the **designated IP** CIDCO emails architects; it defaults to the request host.
+
 Production:
 
 ```bash
@@ -276,9 +299,9 @@ After signing in you choose **API** or **SFTP**, and that dashboard opens.
 | ------------------ | ------ | -------------------------------------------------------------- |
 | `/`                | — | Sign in / sign up, then pick your channel |
 | `/cidco`           | CIDCO · API | AQI Data, Architect Handshakes, **Validation Requests**, Token Requests, Communication Logs |
-| `/cidco/sftp`      | CIDCO · SFTP | **Delivered workbooks** (sheet preview), Handshake requests, SFTP accounts |
+| `/cidco/sftp`      | CIDCO · SFTP | **Delivered transfers** (validation + file preview), **Companies** (the register), SFTP accounts |
 | `/architect`       | Architect · API | Connection, Messages (tokens from CIDCO), Send AQI data (**Automate**), My readings, Activity log |
-| `/architect/sftp`  | Architect · SFTP | Handshake status, connection details, workbook template, upload results |
+| `/architect/sftp`  | Architect · SFTP | **WinSCP-style transfer panes**, their registration, CSV template, per-transfer validation results |
 | `/docs/architect`  | — | API channel guide (validation, tokens, sending data) |
 | `/docs/sftp`       | — | SFTP channel guide (handshake, the workbook, uploading) |
 
@@ -521,6 +544,7 @@ psql "$DATABASE_URL" -c 'SELECT "referenceNo","monitoringStationId","aqiValue","
 | `npm run db:seed`   | Seed demo users, projects, reports   |
 | `npm run db:studio` | Prisma Studio                        |
 | `npm run sftp`      | The SFTP intake server (port 2222)   |
+| `npx tsx scripts/architect-sender.ts` | The architect-side automated CSV sender |
 
 End-to-end checks, with the servers running:
 

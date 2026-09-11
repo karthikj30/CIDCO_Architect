@@ -27,6 +27,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
             clientId: true,
             whitelistedIp: true,
             architect: { select: { id: true, name: true, email: true, firmName: true, councilRegNo: true } },
+            company: true,
           },
         },
       },
@@ -55,6 +56,28 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
         sourceIp: upload.sourceIp,
         receivedAt: upload.receivedAt,
         parsedAt: upload.parsedAt,
+        mode: upload.mode,
+        // The validation CIDCO ran: what arrived, what was registered, and
+        // which of the three fields matched.
+        validation: {
+          passed: upload.validationPassed,
+          reason: upload.rejectionReason,
+          companyId: {
+            presented: upload.presentedCompanyId,
+            expected: upload.handshake.company?.companyId ?? null,
+            match: upload.companyIdMatch,
+          },
+          ip: {
+            presented: upload.presentedIp,
+            expected: upload.handshake.company?.architectServerIp ?? null,
+            match: upload.ipMatch,
+          },
+          filePath: {
+            presented: upload.presentedPath,
+            expected: upload.handshake.company?.filePath ?? null,
+            match: upload.pathMatch,
+          },
+        },
         handshake: upload.handshake,
       },
     });

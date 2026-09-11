@@ -1,7 +1,8 @@
 import { createHash, timingSafeEqual } from 'crypto';
 import path from 'path';
 import ExcelJS from 'exceljs';
-import type { ArchitectHandshake, Prisma } from '@prisma/client';
+import Papa from 'papaparse';
+import type { ArchitectHandshake, Company, Prisma, TransferMode } from '@prisma/client';
 import { prisma } from './prisma';
 import { createReport } from './reports';
 import { normaliseReadingFields, reportSchema } from './validation';
@@ -9,12 +10,15 @@ import { normaliseReadingFields, reportSchema } from './validation';
 /**
  * The SFTP delivery channel.
  *
- * CIDCO issues an architect an SFTP user id and password. The architect's first
- * connection is the handshake request: the server checks the credentials,
- * records where the connection came from and leaves it for a CIDCO officer to
- * approve. Once approved the architect uploads an Excel workbook whose columns
- * carry the same AQI parameters as the API channel, and CIDCO parses it into
- * readings and previews the sheet on its dashboard.
+ * CIDCO registers the company by hand first — company name, company id, the
+ * architect's server address and the file path their CSV is taken from — and
+ * only then issues an SFTP user id and password against that record, emailing
+ * it with the designated address to send to.
+ *
+ * From then on the architect sends automatically. **Every single transfer is
+ * validated on the CIDCO side**: the company id, the address it arrived from
+ * and the path it was taken from are compared against what CIDCO registered.
+ * Only when all three match is the file parsed and its readings stored.
  */
 
 // --- Workbook shape --------------------------------------------------------
@@ -117,14 +121,19 @@ export function homeDirFor(clientId: string) {
 
 export const SFTP_PORT = Number(process.env.SFTP_PORT || 2222);
 
-/** Connection details CIDCO shows the architect, and puts in the docs. */
+/**
+ * The connection details CIDCO emails out. `designatedIp` is the address the
+ * architect sends TO — not to be confused with the architect's own server
+ * address, which CIDCO registers and validates every transfer against.
+ */
 export function sftpEndpoint(host?: string | null) {
+  const designatedIp = process.env.SFTP_PUBLIC_HOST || host || 'localhost';
   return {
-    host: host || process.env.SFTP_PUBLIC_HOST || 'localhost',
+    designatedIp,
+    host: designatedIp,
     port: SFTP_PORT,
     protocol: 'SFTP (SSH File Transfer Protocol)',
-    uploadDir: '/upload',
-    fileTypes: '.xlsx workbooks',
+    fileTypes: '.csv (or .xlsx)',
   };
 }
 
@@ -197,6 +206,119 @@ export async function parseWorkbook(buffer: Buffer): Promise<ParsedSheet> {
   return { sheetName: sheet.name, columns, rows };
 }
 
+/** Reads a CSV: row 1 is the header, every later row is a reading. */
+export function parseCsv(buffer: Buffer): ParsedSheet {
+  const text = buffer.toString('utf8').replace(/^﻿/, '');
+  const parsed = Papa.parse<Record<string, string>>(text, {
+    header: true,
+    skipEmptyLines: 'greedy',
+  });
+
+  const labels = (parsed.meta.fields ?? []).map((f) => f.trim()).filter(Boolean);
+  if (labels.length === 0) throw new Error('The first line of the CSV must be the column headers.');
+  const columns: SheetColumn[] = labels.map((label) => ({ label, key: canonicalHeader(label) }));
+
+  const rows = parsed.data
+    .map((raw) => {
+      const record: Record<string, unknown> = {};
+      let hasValue = false;
+      for (const label of labels) {
+        const value = raw[label];
+        const trimmed = typeof value === 'string' ? value.trim() : value;
+        if (trimmed !== undefined && trimmed !== null && trimmed !== '') hasValue = true;
+        record[canonicalHeader(label)] = trimmed ?? null;
+      }
+      return hasValue ? record : null;
+    })
+    .filter((r): r is Record<string, unknown> => r !== null);
+
+  return { sheetName: 'CSV', columns, rows };
+}
+
+/** The file types the architect may send. CSV is the everyday one. */
+export const ACCEPTED_EXTENSIONS = ['.csv', '.xlsx'] as const;
+
+export function isAcceptedFile(fileName: string) {
+  return ACCEPTED_EXTENSIONS.some((ext) => fileName.toLowerCase().endsWith(ext));
+}
+
+/** Parses whichever of the accepted formats arrived. */
+export async function parseDataFile(buffer: Buffer, fileName: string): Promise<ParsedSheet> {
+  if (fileName.toLowerCase().endsWith('.csv')) return parseCsv(buffer);
+  return parseWorkbook(buffer);
+}
+
+// --- CIDCO-side transfer validation ----------------------------------------
+
+/** What a transfer presented, to be checked against the company record. */
+export type PresentedTransfer = {
+  companyId: string | null;
+  ip: string | null;
+  filePath: string | null;
+};
+
+export type TransferValidation = {
+  companyIdMatch: boolean;
+  ipMatch: boolean;
+  pathMatch: boolean;
+  passed: boolean;
+  reason: string | null;
+  expected: { companyId: string; ip: string; filePath: string };
+  presented: PresentedTransfer;
+};
+
+/** Trailing slashes and case should not decide whether a transfer is accepted. */
+export function normalisePath(value: string | null | undefined) {
+  if (!value) return '';
+  const collapsed = value.trim().replace(/\\/g, '/').replace(/\/+$/, '');
+  return collapsed === '' ? '/' : collapsed;
+}
+
+export function normaliseIp(value: string | null | undefined) {
+  if (!value) return '';
+  const trimmed = value.trim();
+  if (trimmed === '::1') return '127.0.0.1';
+  return trimmed.startsWith('::ffff:') ? trimmed.slice(7) : trimmed;
+}
+
+/**
+ * The check CIDCO runs on every transfer: does the company id, the address it
+ * came from and the path it was taken from match what CIDCO registered for this
+ * company? Nothing is stored unless all three do.
+ */
+export function validateTransfer(company: Company, presented: PresentedTransfer): TransferValidation {
+  const companyIdMatch = (presented.companyId ?? '').trim() === company.companyId;
+  const ipMatch = normaliseIp(presented.ip) === normaliseIp(company.architectServerIp);
+  const pathMatch = normalisePath(presented.filePath) === normalisePath(company.filePath);
+  const passed = companyIdMatch && ipMatch && pathMatch && company.active;
+
+  const mismatches: string[] = [];
+  if (!company.active) mismatches.push('the company registration is inactive');
+  if (!companyIdMatch) {
+    mismatches.push(`company id "${presented.companyId ?? '—'}" does not match the registered "${company.companyId}"`);
+  }
+  if (!ipMatch) {
+    mismatches.push(`address ${presented.ip ?? '—'} is not the registered server address ${company.architectServerIp}`);
+  }
+  if (!pathMatch) {
+    mismatches.push(`file path "${presented.filePath ?? '—'}" is not the registered path "${company.filePath}"`);
+  }
+
+  return {
+    companyIdMatch,
+    ipMatch,
+    pathMatch,
+    passed,
+    reason: passed ? null : mismatches.join('; '),
+    expected: {
+      companyId: company.companyId,
+      ip: company.architectServerIp,
+      filePath: company.filePath,
+    },
+    presented,
+  };
+}
+
 /** The blank workbook CIDCO hands the architect to fill in. */
 export async function buildTemplateWorkbook(): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
@@ -215,6 +337,16 @@ export async function buildTemplateWorkbook(): Promise<Buffer> {
 
   const out = await wb.xlsx.writeBuffer();
   return Buffer.from(out);
+}
+
+/** The same columns as a CSV — the format the automated feed normally sends. */
+export function buildCsvTemplate(): string {
+  const header = SHEET_COLUMNS.map((c) => c.header).join(',');
+  const example = SHEET_COLUMNS.map((c) => {
+    const value = String(c.example);
+    return value.includes(',') ? `"${value}"` : value;
+  }).join(',');
+  return `${header}\n${example}\n`;
 }
 
 // --- Import ----------------------------------------------------------------
@@ -272,18 +404,45 @@ function describeError(error: unknown): string {
 }
 
 /**
- * Stores an uploaded workbook, parses it, imports the readings and records the
- * whole outcome for the CIDCO dashboard. Used by the SFTP server the moment a
- * file handle closes.
+ * Takes a delivered file: validates it against the company CIDCO registered,
+ * and only if that passes parses it and stores the readings. Either way the
+ * whole outcome — what was presented, what was expected, what matched — is
+ * recorded for the CIDCO dashboard.
+ *
+ * Used by the SFTP server the moment a file handle closes, and by the portal
+ * relay when an architect drags a file in.
  */
-export async function ingestWorkbook(params: {
+export async function ingestTransfer(params: {
   handshake: ArchitectHandshake;
+  company: Company | null;
   fileName: string;
   storedName: string;
   buffer: Buffer;
   sourceIp: string | null;
+  /** The path the file was taken from / written to, as presented. */
+  presentedPath: string | null;
+  mode: TransferMode;
 }) {
-  const { handshake, fileName, storedName, buffer, sourceIp } = params;
+  const { handshake, company, fileName, storedName, buffer, sourceIp, presentedPath, mode } = params;
+
+  const presented: PresentedTransfer = {
+    companyId: company?.companyId ?? null,
+    ip: sourceIp,
+    filePath: presentedPath,
+  };
+
+  // No company record means no reference to validate against — refuse it.
+  const validation: TransferValidation = company
+    ? validateTransfer(company, presented)
+    : {
+        companyIdMatch: false,
+        ipMatch: false,
+        pathMatch: false,
+        passed: false,
+        reason: 'These credentials are not linked to a registered company',
+        expected: { companyId: '—', ip: '—', filePath: '—' },
+        presented,
+      };
 
   const upload = await prisma.sftpUpload.create({
     data: {
@@ -292,12 +451,32 @@ export async function ingestWorkbook(params: {
       storedName,
       sizeBytes: buffer.length,
       sourceIp,
+      mode,
+      presentedCompanyId: presented.companyId,
+      presentedIp: presented.ip,
+      presentedPath: presented.filePath,
+      companyIdMatch: validation.companyIdMatch,
+      ipMatch: validation.ipMatch,
+      pathMatch: validation.pathMatch,
+      validationPassed: validation.passed,
       status: 'RECEIVED',
     },
   });
 
+  // Validation failed → nothing is parsed and nothing reaches the readings.
+  if (!validation.passed) {
+    return await prisma.sftpUpload.update({
+      where: { id: upload.id },
+      data: {
+        status: 'REJECTED',
+        rejectionReason: validation.reason,
+        parsedAt: new Date(),
+      },
+    });
+  }
+
   try {
-    const sheet = await parseWorkbook(buffer);
+    const sheet = await parseDataFile(buffer, fileName);
     const outcome = await importRows({ architectId: handshake.architectId, rows: sheet.rows });
 
     const status =

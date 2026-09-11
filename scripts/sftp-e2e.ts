@@ -1,19 +1,26 @@
 /**
- * End-to-end drive of the SFTP channel through the real portal routes:
- * CIDCO issues credentials -> the architect's first connection is refused and
- * queued -> a CIDCO officer approves it on the dashboard -> the architect
- * uploads an Excel workbook -> CIDCO previews the sheet and has the readings.
+ * End-to-end drive of the SFTP channel, in the order CIDCO actually works:
+ *
+ *   i.  CIDCO registers the company by hand — name, company id, the architect's
+ *       server address, and the file path their CSV is taken from.
+ *   1.  CIDCO issues a user id and password against it and emails them, with
+ *       the designated address to send to.
+ *   2.  The architect sends the CSV automatically from that path.
+ *   --  Every transfer is validated on the CIDCO side against the registration
+ *       before anything is stored.
  *
  * Needs both servers running:  npm start  and  npm run sftp
  */
 import { Client } from 'ssh2';
-import ExcelJS from 'exceljs';
 import { prisma } from '../src/lib/prisma';
-import { SHEET_COLUMNS } from '../src/lib/sftp';
+import { buildCsvTemplate, SHEET_COLUMNS } from '../src/lib/sftp';
 
 const BASE = process.env.BASE_URL || 'http://localhost:3000';
 const SFTP_HOST = '127.0.0.1';
 const SFTP_PORT = Number(process.env.SFTP_PORT || 2222);
+/** Everything here runs on one box, so this is the "architect's server IP". */
+const ARCHITECT_IP = '127.0.0.1';
+const FILE_PATH = '/var/aqi/exports';
 
 const fails: string[] = [];
 const check = (ok: boolean, label: string) => {
@@ -29,8 +36,7 @@ async function api(path: string, init: RequestInit = {}) {
   });
   const setCookie = res.headers.get('set-cookie');
   if (setCookie) cookie = setCookie.split(';')[0];
-  const json = await res.json().catch(() => null);
-  return { status: res.status, json };
+  return { status: res.status, json: await res.json().catch(() => null) };
 }
 
 /** Resolves the open client, or null when the server refuses the session. */
@@ -56,41 +62,42 @@ function put(conn: Client, remote: string, buffer: Buffer) {
   });
 }
 
-async function workbook(rows: number) {
-  const wb = new ExcelJS.Workbook();
-  const sheet = wb.addWorksheet('AQI Data');
-  sheet.columns = SHEET_COLUMNS.map((c) => ({ header: c.header, key: c.key, width: c.width }));
+/** A CSV of readings, plus one deliberately broken row. */
+function csv(rows: number) {
+  const header = SHEET_COLUMNS.map((c) => c.header).join(',');
+  const lines = [header];
   for (let i = 0; i < rows; i++) {
-    sheet.addRow({
-      projectSiteId: `CIDCO-SFTP-${i + 1}`,
-      monitoringStationId: `STN-SFTP-0${i + 1}`,
-      oem: 'Envirotech',
-      deviceModel: 'AQ-900',
-      siteName: `Belapur Node ${i + 1}`,
-      location: 'CBD Belapur, Navi Mumbai',
-      measuredAt: `2026-09-11T0${i}:00:00Z`,
-      aqiValue: 90 + i,
-      pm25: 38.2 + i,
-      pm10: 72.4 + i,
-      no2: 21.1,
-      so2: 8.3,
-      co: 0.6,
-      ozone: 18.7,
-      temperature: 29.4,
-      humidity: 71,
-      otherParams: 'noise=61 dB',
-      integrationMethod: 'SFTP Excel upload',
-    });
+    lines.push(
+      [
+        `CIDCO-SFTP-${i + 1}`,
+        `STN-SFTP-0${i + 1}`,
+        'Envirotech',
+        'AQ-900',
+        `Belapur Node ${i + 1}`,
+        'CBD Belapur',
+        `2026-09-11T0${i}:00:00Z`,
+        90 + i,
+        38.2,
+        72.4,
+        21.1,
+        8.3,
+        0.6,
+        18.7,
+        29.4,
+        71,
+        'noise=61 dB',
+        'SFTP CSV upload',
+      ].join(','),
+    );
   }
-  // One deliberately broken row, to prove a bad row never costs the good ones.
-  sheet.addRow({ projectSiteId: 'CIDCO-BAD', siteName: 'Broken row', measuredAt: 'not-a-date' });
-  return Buffer.from(await wb.xlsx.writeBuffer());
+  lines.push('CIDCO-BAD,,,,Broken row,,not-a-date,,,,,,,,,,,');
+  return Buffer.from(`${lines.join('\n')}\n`, 'utf8');
 }
 
 async function main() {
   const stamp = Date.now();
 
-  console.log('== 1. CIDCO officer signs in and issues SFTP credentials ==');
+  console.log('== i. CIDCO registers the company by hand ==');
   const login = await api('/api/auth/login', {
     method: 'POST',
     body: JSON.stringify({ email: 'officer@cidco.example', password: 'Password123' }),
@@ -102,102 +109,136 @@ async function main() {
     method: 'POST',
     body: JSON.stringify({ email: archEmail, password: 'Placeholder123', name: 'SFTP architect', role: 'ARCHITECT' }),
   });
-  // Registering signed us in as the architect; sign the officer back in.
   cookie = '';
   await api('/api/auth/login', {
     method: 'POST',
     body: JSON.stringify({ email: 'officer@cidco.example', password: 'Password123' }),
   });
 
+  const companyId = `CIDCO-CO-${stamp}`;
+  const registered = await api('/api/admin/sftp/companies', {
+    method: 'POST',
+    body: JSON.stringify({
+      companyName: 'Nair Design Studio',
+      companyId,
+      architectServerIp: ARCHITECT_IP,
+      filePath: FILE_PATH,
+      architectEmail: archEmail,
+    }),
+  });
+  check(registered.status === 201, `company registered (got ${registered.status})`);
+  check(registered.json?.data?.company?.filePath === FILE_PATH, 'the file path is stored on the registration');
+
+  // Credentials cannot exist without a registration.
+  const orphan = await api('/api/admin/sftp/accounts', {
+    method: 'POST',
+    body: JSON.stringify({ companyId: 'NOT-REGISTERED' }),
+  });
+  check(orphan.status === 404, 'credentials cannot be issued for an unregistered company');
+
+  console.log('== 1. CIDCO emails the user id, password and designated IP ==');
   const issued = await api('/api/admin/sftp/accounts', {
     method: 'POST',
-    body: JSON.stringify({ architectEmail: archEmail, expiresInDays: 30 }),
+    body: JSON.stringify({ companyId }),
   });
-  check(issued.status === 201, 'SFTP credentials issued');
+  check(issued.status === 201, `credentials issued (got ${issued.status})`);
   const cred = issued.json.data.credential;
   check(
-    ['username', 'password', 'expiryDate', 'host', 'port', 'protocol', 'uploadDir', 'fileTypes'].every((k) => k in cred),
-    'credential carries the user id, password and connection details',
+    ['username', 'password', 'designatedIp', 'companyId', 'filePath'].every((k) => k in cred),
+    'the emailed bundle carries the user id, password, designated IP, company id and file path',
   );
-  console.log(`   user id ${cred.username} · host ${cred.host}:${cred.port}`);
+  console.log(`   ${cred.username} → ${cred.designatedIp}:${cred.port}${cred.filePath}`);
 
-  console.log('== 2. the architect connects for the first time ==');
-  check((await connect(cred.username, 'wrong-password')) === null, 'wrong password is refused');
-  check((await connect(cred.username, cred.password)) === null, 'first connection refused, pending CIDCO approval');
+  console.log('== 2. the architect sends the CSV from the registered path ==');
+  check((await connect(cred.username, 'wrong-password')) === null, 'a wrong password is refused');
 
-  const queue = await api('/api/admin/sftp/validation-requests?status=PENDING');
-  const mine = queue.json.data.requests.find(
-    (r: { handshake: { clientId: string } }) => r.handshake.clientId === cred.username,
-  );
-  check(!!mine, 'handshake request is on the CIDCO SFTP queue');
-  check(!!mine?.presentedIp, `CIDCO sees where it came from (${mine?.presentedIp})`);
-  check(!!mine?.deviceInfo, `CIDCO sees the SSH client (${mine?.deviceInfo})`);
-
-  const apiQueue = await api('/api/admin/validation-requests');
-  check(
-    !apiQueue.json.data.requests.some((r: { handshake: { clientId: string } }) => r.handshake.clientId === cred.username),
-    'the SFTP request does NOT show on the API channel queue',
-  );
-
-  console.log('== 3. CIDCO approves ==');
-  const approved = await api(`/api/admin/sftp/validation-requests/${mine.id}/approve`, { method: 'POST', body: '{}' });
-  check(approved.status === 200, 'officer approved the handshake');
-  check(approved.json.data.whitelistedIp === mine.presentedIp, 'the address the architect connected from is whitelisted');
-
-  console.log('== 4. the architect uploads their workbook ==');
   const conn = await connect(cred.username, cred.password);
-  check(!!conn, 'connection accepted after approval');
+  check(!!conn, 'the registered credentials connect straight away — no separate approval step');
   if (!conn) throw new Error('cannot continue without a session');
 
   const architect = await prisma.user.findUniqueOrThrow({ where: { email: archEmail } });
   const before = await prisma.report.count({ where: { userId: architect.id } });
 
-  await put(conn, '/upload/aqi-september.xlsx', await workbook(3));
+  await put(conn, `${FILE_PATH}/readings.csv`, csv(3));
   conn.end();
-  await new Promise((r) => setTimeout(r, 3000)); // the server parses after acking the client
+  await new Promise((r) => setTimeout(r, 3000)); // the server validates after acking the client
 
-  console.log('== 5. CIDCO can see and preview it ==');
+  console.log('== validation on the CIDCO side ==');
   const list = await api('/api/admin/sftp/uploads');
-  const row = list.json.data.uploads.find((u: { handshake: { clientId: string } }) => u.handshake.clientId === cred.username);
-  check(!!row, 'the upload is listed on the CIDCO dashboard');
-  check(row?.fileName === 'aqi-september.xlsx', `the original file name is kept (${row?.fileName})`);
-  check(row?.status === 'PARTIAL', `status reflects the partial import (${row?.status})`);
-  check(row?.importedCount === 3 && row?.rowCount === 4, `3 of 4 rows stored (got ${row?.importedCount} of ${row?.rowCount})`);
+  const row = list.json.data.uploads.find((u: { presentedCompanyId: string | null }) => u.presentedCompanyId === companyId);
+  check(!!row, 'the transfer is on the CIDCO dashboard');
+  check(row?.validationPassed === true, 'validation passed');
+  check(row?.companyIdMatch && row?.ipMatch && row?.pathMatch, 'company id, IP and file path all matched');
+  check(row?.presentedPath === FILE_PATH, `the path it was taken from is recorded (${row?.presentedPath})`);
+  check(row?.presentedIp === ARCHITECT_IP, `the address it came from is recorded (${row?.presentedIp})`);
+  check(row?.importedCount === 3 && row?.rowCount === 4, `3 of 4 CSV rows stored (got ${row?.importedCount} of ${row?.rowCount})`);
 
   const detail = await api(`/api/admin/sftp/uploads/${row.id}`);
-  const d = detail.json.data.upload;
-  check(detail.status === 200, 'the sheet preview loads');
-  check(d.columns.length === SHEET_COLUMNS.length, `every column is previewable (${d.columns.length})`);
-  check(
-    d.columns.every((c: { label: string; key: string }) => c.label && c.key),
-    'each column carries its header label and the field behind it',
-  );
-  check(d.rows.length === 4, `every sheet row is previewable (${d.rows.length})`);
-  check(d.rows[0].aqiValue === 90 && d.rows[0].pm25 === 38.2, 'the preview shows the AQI values as delivered');
-  check(d.errors.length === 1 && d.errors[0].row === 5, `the bad row is named with its reason (row ${d.errors[0]?.row})`);
+  const v = detail.json.data.upload.validation;
+  check(v.companyId.presented === companyId && v.companyId.expected === companyId, 'the officer sees company id, incoming vs registered');
+  check(v.ip.presented === ARCHITECT_IP && v.ip.expected === ARCHITECT_IP, 'the officer sees the IP, incoming vs registered');
+  check(v.filePath.presented === FILE_PATH && v.filePath.expected === FILE_PATH, 'the officer sees the file path, incoming vs registered');
+  check(detail.json.data.upload.rows.length === 4, 'the CSV is previewable row by row');
 
   const after = await prisma.report.count({ where: { userId: architect.id } });
   check(after - before === 3, `3 readings landed in the database (got ${after - before})`);
-  const stored = await prisma.report.findFirst({ where: { userId: architect.id }, orderBy: { receivedAt: 'desc' } });
-  check(stored?.source === 'SFTP', `readings are marked as arriving over SFTP (${stored?.source})`);
-  check(stored?.temperature === 29.4 && stored?.humidity === 71, 'every AQI column carried through to the reading');
 
-  console.log('== 6. the architect sees the result on their own dashboard ==');
+  console.log('== a transfer that does not match is refused ==');
+  const conn2 = await connect(cred.username, cred.password);
+  if (!conn2) throw new Error('reconnect failed');
+  await put(conn2, '/somewhere/else/readings.csv', csv(2));
+  conn2.end();
+  await new Promise((r) => setTimeout(r, 2500));
+
+  const afterBad = await prisma.report.count({ where: { userId: architect.id } });
+  const rejected = await prisma.sftpUpload.findFirst({
+    where: { handshake: { clientId: cred.username }, presentedPath: '/somewhere/else' },
+    orderBy: { receivedAt: 'desc' },
+  });
+  check(!!rejected, 'the mismatched transfer is recorded');
+  check(rejected?.status === 'REJECTED', `it is marked REJECTED (got ${rejected?.status})`);
+  check(rejected?.pathMatch === false && rejected?.companyIdMatch === true, 'the file path is the field that failed');
+  check(!!rejected?.rejectionReason, `the reason is recorded (${rejected?.rejectionReason?.slice(0, 60)}…)`);
+  check(afterBad === after, 'nothing was stored from the refused transfer');
+
+  console.log('== the wrong source address is refused outright ==');
+  await prisma.company.update({ where: { companyId }, data: { architectServerIp: '203.0.113.99' } });
+  check((await connect(cred.username, cred.password)) === null, 'a connection from an unregistered address is refused');
+  await prisma.company.update({ where: { companyId }, data: { architectServerIp: ARCHITECT_IP } });
+
+  console.log('== the architect sees the same result ==');
   cookie = '';
   await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: archEmail, password: 'Placeholder123' }) });
   const mePage = await api('/api/architect/sftp/me');
   const account = mePage.json.data.accounts[0];
-  check(mePage.status === 200, 'architect SFTP workspace loads');
-  check(account?.status === 'ESTABLISHED', `the architect sees the channel is open (${account?.status})`);
-  check(account?.uploads?.[0]?.importedCount === 3, 'the architect sees how many rows CIDCO stored');
-  check(account?.uploads?.[0]?.errors?.length === 1, 'the architect sees which row was rejected and why');
-  check(!!mePage.json.data.endpoint?.host, 'the architect is shown the connection details');
+  check(account?.company?.companyId === companyId, 'the architect sees the company CIDCO registered');
+  check(account?.company?.filePath === FILE_PATH, 'the architect sees the registered file path');
+  check(mePage.json.data.endpoint.designatedIp !== undefined, 'the architect sees the designated IP to send to');
+  check(account?.uploads?.some((u: { validationPassed: boolean }) => u.validationPassed), 'the architect sees the accepted transfer');
+  check(account?.uploads?.some((u: { validationPassed: boolean }) => !u.validationPassed), 'the architect sees the refused one, with its reason');
 
-  const apiWorkspace = await api('/api/architect/me');
-  check(
-    apiWorkspace.json.data.handshakes.length === 0,
-    'the SFTP account does NOT appear in the architect API workspace',
-  );
+  console.log('== the portal drag-and-drop path uses the same validation ==');
+  const form = new FormData();
+  form.set('username', cred.username);
+  form.set('password', cred.password);
+  form.set('designatedIp', cred.designatedIp);
+  form.set('filePath', FILE_PATH);
+  form.set('file', new Blob([csv(2)], { type: 'text/csv' }), 'dragged.csv');
+  const dropped = await fetch(`${BASE}/api/architect/sftp/transfer`, { method: 'POST', body: form });
+  const droppedJson = await dropped.json();
+  check(dropped.status === 201, `a dropped CSV is accepted (got ${dropped.status})`);
+  check(droppedJson?.data?.upload?.importedCount === 2, `its 2 rows were stored (got ${droppedJson?.data?.upload?.importedCount})`);
+
+  const badForm = new FormData();
+  badForm.set('username', cred.username);
+  badForm.set('password', cred.password);
+  badForm.set('filePath', '/not/the/registered/path');
+  badForm.set('file', new Blob([csv(1)], { type: 'text/csv' }), 'wrong-path.csv');
+  const badDrop = await fetch(`${BASE}/api/architect/sftp/transfer`, { method: 'POST', body: badForm });
+  check(badDrop.status === 403, `a dropped file from the wrong path is refused (got ${badDrop.status})`);
+
+  console.log('== the CSV template matches what the parser reads ==');
+  check(buildCsvTemplate().split('\n')[0].includes('AQI Value'), 'the template header carries the AQI columns');
 
   console.log(fails.length ? `\nFAILED: ${fails.join(' | ')}` : '\nALL SFTP CHANNEL CHECKS PASSED');
   await prisma.$disconnect();

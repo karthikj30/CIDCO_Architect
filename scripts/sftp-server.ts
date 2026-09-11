@@ -4,15 +4,16 @@
  * This is the SFTP half of the portal, and it is deliberately separate from the
  * API half: different credentials, different dashboard, different transport.
  *
- *   1. CIDCO issues an architect an SFTP user id and password (emailed).
- *   2. The architect's FIRST connection is the handshake request. The server
- *      verifies the credentials, records the IP and SSH client it came from as
- *      a validation request, then refuses the session — nothing is established
- *      until a CIDCO officer says so.
- *   3. The officer approves on the CIDCO SFTP dashboard. That whitelists the IP
- *      and opens the channel.
- *   4. The architect connects again and uploads an .xlsx workbook into /upload.
- *      On close, CIDCO parses the sheet into readings and records a preview.
+ *   1. A CIDCO officer registers the company by hand first — company name,
+ *      company id, the architect's server address, and the file path their CSV
+ *      is taken from.
+ *   2. CIDCO issues an SFTP user id and password against that record and emails
+ *      it, along with the designated address to send to.
+ *   3. The architect sends automatically, taking the CSV from the registered
+ *      path and writing it to the same path here.
+ *   4. EVERY transfer is validated against the company record: company id, the
+ *      address it arrived from, and the path it was written to. Only when all
+ *      three match is the file parsed and its readings stored.
  *
  * Run it with:  npm run sftp
  */
@@ -22,14 +23,31 @@ import path from 'path';
 import { generateKeyPairSync, randomUUID } from 'crypto';
 import { Server, utils } from 'ssh2';
 import type { Connection, FileEntry } from 'ssh2';
-import type { ArchitectHandshake } from '@prisma/client';
+import type { ArchitectHandshake, Company } from '@prisma/client';
 import { prisma } from '../src/lib/prisma';
-import { hashesEqual, homeDirFor, ingestWorkbook, sha256, storageRoot, SFTP_PORT } from '../src/lib/sftp';
+import {
+  hashesEqual,
+  homeDirFor,
+  ingestTransfer,
+  isAcceptedFile,
+  normaliseIp,
+  normalisePath,
+  sha256,
+  storageRoot,
+  SFTP_PORT,
+} from '../src/lib/sftp';
 
 const { STATUS_CODE, OPEN_MODE } = utils.sftp;
 
-const UPLOAD_DIR = '/upload';
 const HOST = process.env.SFTP_HOST || '0.0.0.0';
+
+/** An authenticated session: the credentials and the company behind them. */
+type Account = { handshake: ArchitectHandshake; company: Company | null };
+
+/** Where this account is expected to write — the registered file path. */
+function expectedDir(account: Account) {
+  return normalisePath(account.company?.filePath) || '/upload';
+}
 
 function log(...parts: unknown[]) {
   console.log(`[sftp ${new Date().toISOString()}]`, ...parts);
@@ -81,23 +99,23 @@ async function hostKey(): Promise<string> {
   }
 }
 
-function normaliseIp(ip: string | null | undefined) {
-  if (!ip) return null;
-  const trimmed = ip.trim();
-  if (trimmed === '::1') return '127.0.0.1';
-  return trimmed.startsWith('::ffff:') ? trimmed.slice(7) : trimmed;
-}
-
 type AuthOutcome =
-  | { ok: true; handshake: ArchitectHandshake }
+  | { ok: true; account: Account }
   | { ok: false; reason: string; handshakeId: string | null; event: string };
 
 /**
- * The handshake, run on every connection attempt. Only an architect whose SFTP
- * credentials verify AND whose channel a CIDCO officer has approved gets in.
+ * Run on every connection. The credentials must verify and must belong to a
+ * company CIDCO registered beforehand — that registration is the manual gate,
+ * so there is no separate per-connection approval step.
+ *
+ * The address is checked here as an early refusal, and checked again against
+ * the company record on each transfer.
  */
 async function authorise(username: string, password: string, ip: string | null, client: string): Promise<AuthOutcome> {
-  const handshake = await prisma.architectHandshake.findUnique({ where: { clientId: username } });
+  const handshake = await prisma.architectHandshake.findUnique({
+    where: { clientId: username },
+    include: { company: true },
+  });
 
   if (!handshake || handshake.channel !== 'SFTP') {
     return { ok: false, reason: `Unknown SFTP user id "${username}"`, handshakeId: null, event: 'SFTP_AUTH_FAILED' };
@@ -112,52 +130,50 @@ async function authorise(username: string, password: string, ip: string | null, 
     return { ok: false, reason: 'These SFTP credentials have expired', handshakeId: handshake.id, event: 'SFTP_AUTH_FAILED' };
   }
 
-  // --- Not yet approved: this connection IS the handshake request -----------
-  if (handshake.status !== 'ESTABLISHED') {
-    const open = await prisma.validationRequest.findFirst({
-      where: { handshakeId: handshake.id, status: 'PENDING' },
-    });
-    if (!open) {
-      await prisma.validationRequest.create({
-        data: {
-          handshakeId: handshake.id,
-          channel: 'SFTP',
-          presentedIp: ip,
-          deviceInfo: client,
-        },
-      });
-      await prisma.architectHandshake.update({
-        where: { id: handshake.id },
-        data: { status: 'AWAITING_APPROVAL', architectValidatedAt: new Date(), lastValidatedIp: ip },
-      });
-      await logComm({
-        handshakeId: handshake.id,
-        direction: 'ARCHITECT_TO_ADMIN',
-        event: 'SFTP_HANDSHAKE_REQUESTED',
-        statusCode: 202,
-        detail: `SFTP handshake request from IP ${ip ?? 'unknown'} · client: ${client} — awaiting CIDCO approval`,
-        ip,
-      });
-    }
+  const company = handshake.company;
+  if (!company) {
     return {
       ok: false,
-      reason: 'Your SFTP handshake request is with CIDCO and is awaiting approval. Try again once CIDCO approves it.',
+      reason: 'These credentials are not linked to a registered company',
       handshakeId: handshake.id,
-      event: 'SFTP_AWAITING_APPROVAL',
+      event: 'SFTP_AUTH_FAILED',
+    };
+  }
+  if (!company.active) {
+    return {
+      ok: false,
+      reason: `The registration for ${company.companyName} (${company.companyId}) is inactive`,
+      handshakeId: handshake.id,
+      event: 'SFTP_AUTH_FAILED',
     };
   }
 
-  // --- Established: the connection must come from the whitelisted IP --------
-  if (handshake.enforceWhitelist && handshake.whitelistedIp && normaliseIp(handshake.whitelistedIp) !== ip) {
+  // The registered server address is the only one data may arrive from.
+  if (normaliseIp(company.architectServerIp) !== normaliseIp(ip)) {
     return {
       ok: false,
-      reason: `This channel is registered to ${handshake.whitelistedIp}; refusing a connection from ${ip ?? 'unknown'}`,
+      reason:
+        `${company.companyId} is registered to ${company.architectServerIp}; ` +
+        `refusing a connection from ${ip ?? 'unknown'}`,
       handshakeId: handshake.id,
       event: 'SFTP_IP_REFUSED',
     };
   }
 
-  return { ok: true, handshake };
+  // Keep the channel record current so the dashboards read correctly.
+  await prisma.architectHandshake.update({
+    where: { id: handshake.id },
+    data: {
+      status: 'ESTABLISHED',
+      establishedAt: handshake.establishedAt ?? new Date(),
+      whitelistedIp: company.architectServerIp,
+      whitelistedAt: handshake.whitelistedAt ?? new Date(),
+      deviceInfo: client,
+      lastValidatedIp: ip,
+    },
+  });
+
+  return { ok: true, account: { handshake, company } };
 }
 
 // --- SFTP session ----------------------------------------------------------
@@ -166,6 +182,8 @@ async function authorise(username: string, password: string, ip: string | null, 
 type WriteHandle = {
   kind: 'file';
   fileName: string;
+  /** The directory the client wrote to — validated against the company record. */
+  dir: string;
   chunks: Buffer[];
   bytes: number;
 };
@@ -186,13 +204,19 @@ function attrsFor(size: number, isDir: boolean) {
   };
 }
 
-function startSession(conn: Connection, handshake: ArchitectHandshake, ip: string | null) {
+function startSession(conn: Connection, account: Account, ip: string | null) {
+  const { handshake } = account;
+  // The directory this account is expected to write to: the file path CIDCO
+  // registered for the company. The path a client actually writes to is what
+  // gets validated on every transfer.
+  const home = expectedDir(account);
+
   conn.on('session', (acceptSession) => {
     const session = acceptSession();
 
     session.on('sftp', (acceptSftp) => {
       const sftp = acceptSftp();
-      log(`sftp session opened for ${handshake.clientId} from ${ip}`);
+      log(`sftp session opened for ${handshake.clientId} from ${ip} (home ${home})`);
 
       const handles = new Map<number, Handle>();
       let nextHandle = 0;
@@ -205,19 +229,20 @@ function startSession(conn: Connection, handshake: ArchitectHandshake, ip: strin
       };
       const readHandle = (buf: Buffer) => handles.get(buf.readUInt32BE(0));
 
-      // Everything the architect sends lands in /upload; the rest of the tree
-      // is a stub so ordinary SFTP clients can navigate.
+      // A bare "." or "/" lands the client in the registered file path, so a
+      // plain `put readings.csv` writes exactly where CIDCO expects it.
       sftp.on('REALPATH', (reqid, givenPath) => {
-        const resolved = givenPath === '.' || givenPath === '' || givenPath === '/' ? UPLOAD_DIR : path.posix.normalize(givenPath);
+        const resolved =
+          givenPath === '.' || givenPath === '' || givenPath === '/' ? home : path.posix.normalize(givenPath);
         sftp.name(reqid, [{ filename: resolved, longname: resolved, attrs: attrsFor(0, true) } as FileEntry]);
       });
 
+      // Directories are virtual: any path stats as a directory so clients can
+      // navigate to the registered path, wherever it is.
       const statLike = (reqid: number, givenPath: string) => {
-        const clean = path.posix.normalize(givenPath || '/');
-        if (clean === '/' || clean === UPLOAD_DIR || clean === '.') {
-          return sftp.attrs(reqid, attrsFor(0, true));
-        }
-        return sftp.status(reqid, STATUS_CODE.NO_SUCH_FILE);
+        const clean = normalisePath(givenPath) || '/';
+        if (isAcceptedFile(clean)) return sftp.status(reqid, STATUS_CODE.NO_SUCH_FILE);
+        return sftp.attrs(reqid, attrsFor(0, true));
       };
       sftp.on('STAT', statLike);
       sftp.on('LSTAT', statLike);
@@ -233,10 +258,8 @@ function startSession(conn: Connection, handshake: ArchitectHandshake, ip: strin
       sftp.on('FSETSTAT', (reqid) => sftp.status(reqid, STATUS_CODE.OK));
       sftp.on('MKDIR', (reqid) => sftp.status(reqid, STATUS_CODE.OK));
 
-      sftp.on('OPENDIR', async (reqid, givenPath) => {
-        const clean = path.posix.normalize(givenPath || '/');
-        if (clean !== '/' && clean !== UPLOAD_DIR) return sftp.status(reqid, STATUS_CODE.NO_SUCH_FILE);
-        // List what this architect has already delivered.
+      sftp.on('OPENDIR', async (reqid, _givenPath) => {
+        // List what this company has already delivered.
         const uploads = await prisma.sftpUpload
           .findMany({ where: { handshakeId: handshake.id }, orderBy: { receivedAt: 'desc' }, take: 100 })
           .catch(() => []);
@@ -262,11 +285,15 @@ function startSession(conn: Connection, handshake: ArchitectHandshake, ip: strin
           return sftp.status(reqid, STATUS_CODE.PERMISSION_DENIED);
         }
         const base = path.posix.basename(filename);
-        if (!/\.xlsx$/i.test(base)) {
-          log(`refused ${base} from ${handshake.clientId}: not an .xlsx workbook`);
+        if (!isAcceptedFile(base)) {
+          log(`refused ${base} from ${handshake.clientId}: not a .csv or .xlsx file`);
           return sftp.status(reqid, STATUS_CODE.PERMISSION_DENIED);
         }
-        sftp.handle(reqid, newHandle({ kind: 'file', fileName: base, chunks: [], bytes: 0 }));
+        // Remember the directory it is being written to — CIDCO validates it
+        // against the registered file path when the handle closes. A bare
+        // filename means the client's working directory, which is home.
+        const dir = filename.includes('/') ? normalisePath(path.posix.dirname(filename)) : home;
+        sftp.handle(reqid, newHandle({ kind: 'file', fileName: base, dir, chunks: [], bytes: 0 }));
       });
 
       sftp.on('WRITE', (reqid, handleBuf, _offset, data) => {
@@ -293,32 +320,56 @@ function startSession(conn: Connection, handshake: ArchitectHandshake, ip: strin
 
         // Answer the client first, then do the slow work.
         sftp.status(reqid, STATUS_CODE.OK);
-        void receiveFile(handshake, handle, ip);
+        void receiveFile(account, handle, ip);
       });
     });
   });
 }
 
-/** Persists a completed upload and turns its rows into readings. */
-async function receiveFile(handshake: ArchitectHandshake, handle: WriteHandle, ip: string | null) {
+/**
+ * Persists a completed transfer, runs CIDCO's validation over it, and — only
+ * if that passes — turns its rows into readings.
+ */
+async function receiveFile(account: Account, handle: WriteHandle, ip: string | null) {
+  const { handshake, company } = account;
   const buffer = Buffer.concat(handle.chunks);
   const home = homeDirFor(handshake.clientId);
-  const storedName = `${new Date().toISOString().replace(/[:.]/g, '-')}_${randomUUID().slice(0, 8)}.xlsx`;
+  const ext = path.posix.extname(handle.fileName).toLowerCase() || '.csv';
+  const storedName = `${new Date().toISOString().replace(/[:.]/g, '-')}_${randomUUID().slice(0, 8)}${ext}`;
 
   try {
     await fs.mkdir(home, { recursive: true });
     await fs.writeFile(path.join(home, storedName), buffer);
 
-    const upload = await ingestWorkbook({
+    const upload = await ingestTransfer({
       handshake,
+      company,
       fileName: handle.fileName,
       storedName,
       buffer,
       sourceIp: ip,
+      presentedPath: handle.dir,
+      mode: 'DIRECT_SFTP',
     });
 
+    if (!upload.validationPassed) {
+      log(`REJECTED ${handle.fileName} from ${handshake.clientId}: ${upload.rejectionReason}`);
+      await logComm({
+        handshakeId: handshake.id,
+        direction: 'ADMIN_TO_ARCHITECT',
+        event: 'SFTP_VALIDATION_FAILED',
+        statusCode: 403,
+        detail:
+          `"${handle.fileName}" refused — ${upload.rejectionReason}. ` +
+          `Presented company ${upload.presentedCompanyId ?? '—'} from ${ip ?? 'unknown'} at "${handle.dir}". ` +
+          'Nothing was stored.',
+        ip,
+      });
+      return;
+    }
+
     log(
-      `received ${handle.fileName} (${buffer.length} bytes) from ${handshake.clientId}: ` +
+      `received ${handle.fileName} (${buffer.length} bytes) from ${handshake.clientId} at ${handle.dir}: ` +
         `${upload.importedCount}/${upload.rowCount} rows imported, status ${upload.status}`,
     );
 
@@ -328,7 +379,8 @@ async function receiveFile(handshake: ArchitectHandshake, handle: WriteHandle, i
       event: 'SFTP_FILE_RECEIVED',
       statusCode: upload.status === 'FAILED' ? 422 : 201,
       detail:
-        `Workbook "${handle.fileName}" (${buffer.length} bytes) received over SFTP — ` +
+        `"${handle.fileName}" (${buffer.length} bytes) validated for ${company?.companyId} ` +
+        `from ${ip} at "${handle.dir}" — ` +
         `${upload.importedCount} of ${upload.rowCount} rows stored as readings` +
         (upload.failedCount ? `, ${upload.failedCount} rejected` : ''),
       ip,
@@ -382,20 +434,19 @@ async function main() {
               return ctx.reject();
             }
 
-            await prisma.architectHandshake.update({
-              where: { id: outcome.handshake.id },
-              data: { lastValidatedIp: ip },
-            });
+            const { handshake, company } = outcome.account;
             await logComm({
-              handshakeId: outcome.handshake.id,
+              handshakeId: handshake.id,
               direction: 'ARCHITECT_TO_ADMIN',
               event: 'SFTP_CONNECTED',
               statusCode: 200,
-              detail: `SFTP session opened from ${ip ?? 'unknown'} · client: ${client}`,
+              detail:
+                `SFTP session opened for ${company?.companyName} (${company?.companyId}) ` +
+                `from ${ip ?? 'unknown'} · client: ${client}`,
               ip,
             });
 
-            startSession(conn, outcome.handshake, ip);
+            startSession(conn, outcome.account, ip);
             ctx.accept();
           } catch (error) {
             log('authentication error:', error);

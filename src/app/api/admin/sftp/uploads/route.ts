@@ -34,6 +34,7 @@ export async function GET(req: NextRequest) {
         fileName: true,
         sizeBytes: true,
         status: true,
+        mode: true,
         sheetName: true,
         rowCount: true,
         importedCount: true,
@@ -41,11 +42,23 @@ export async function GET(req: NextRequest) {
         sourceIp: true,
         receivedAt: true,
         parsedAt: true,
+        // The validation CIDCO ran on this transfer.
+        presentedCompanyId: true,
+        presentedIp: true,
+        presentedPath: true,
+        companyIdMatch: true,
+        ipMatch: true,
+        pathMatch: true,
+        validationPassed: true,
+        rejectionReason: true,
         handshake: {
           select: {
             id: true,
             clientId: true,
             architect: { select: { id: true, name: true, email: true, firmName: true } },
+            company: {
+              select: { companyId: true, companyName: true, architectServerIp: true, filePath: true },
+            },
           },
         },
       },

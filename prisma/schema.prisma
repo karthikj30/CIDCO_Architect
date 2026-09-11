@@ -104,6 +104,7 @@ model User {
   apiKeys    ApiKey[]
   reports    Report[]
   handshakes ArchitectHandshake[] @relation("ArchitectHandshakes")
+  companies  Company[]            @relation("CompanyArchitect")
 
   @@map("users")
 }
@@ -244,6 +245,9 @@ model ArchitectHandshake {
   // Which delivery channel this handshake is for. An architect can hold one of
   // each; the credentials, dashboards and flows are kept entirely separate.
   channel             TransferChannel @default(API)
+  // SFTP credentials are always issued against a company CIDCO registered
+  // first — that record is what every transfer is validated against.
+  companyRecordId     String?
   // The "userid" half of the credential the admin hands over. Public-ish.
   clientId            String          @unique
   // Only the hash of the "password" half is stored; plaintext shown once.
@@ -280,6 +284,7 @@ model ArchitectHandshake {
   validationRequests ValidationRequest[]
   deliveries         TokenDelivery[]
   sftpUploads        SftpUpload[]
+  company            Company?            @relation(fields: [companyRecordId], references: [id], onDelete: SetNull)
 
   @@index([architectId])
   @@index([status])
@@ -359,12 +364,48 @@ model TokenDelivery {
   @@map("token_deliveries")
 }
 
-/// What happened to an Excel workbook after it landed on the SFTP server.
+/// What happened to a data file after it landed on the SFTP server.
 enum SftpUploadStatus {
   RECEIVED // the file is on disk, not parsed yet
   PARSED // every row became a reading
   PARTIAL // some rows imported, some rejected
   FAILED // nothing could be imported
+  REJECTED // failed CIDCO's transfer validation — nothing was stored
+}
+
+/// How a transfer reached CIDCO.
+enum TransferMode {
+  DIRECT_SFTP // an SFTP client on the architect's own server
+  PORTAL // dragged and dropped in the architect portal, relayed over SFTP
+}
+
+/// A company CIDCO registers by hand before any credentials are issued.
+///
+/// This record is the reference every later transfer is checked against: the
+/// company id the architect presents, the address the data arrives from, and
+/// the file path it is taken from all have to match what CIDCO entered here.
+model Company {
+  id                String   @id @default(cuid())
+  /// CIDCO-assigned identifier for the company, quoted on every transfer.
+  companyId         String   @unique
+  companyName       String
+  /// The architect's own server address — data is only accepted from here.
+  architectServerIp String
+  /// Where the architect's CSV is picked up from, and written to on CIDCO.
+  filePath          String
+  /// The architect user these credentials belong to, once one is linked.
+  architectId       String?
+  notes             String?
+  active            Boolean  @default(true)
+  createdById       String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  architect  User?                @relation("CompanyArchitect", fields: [architectId], references: [id], onDelete: SetNull)
+  handshakes ArchitectHandshake[]
+
+  @@index([architectId])
+  @@map("companies")
 }
 
 /// One Excel workbook an architect uploaded over SFTP. Holds the parse result
@@ -377,6 +418,19 @@ model SftpUpload {
   storedName    String // file name on CIDCO's disk
   sizeBytes     Int
   status        SftpUploadStatus @default(RECEIVED)
+  mode          TransferMode     @default(DIRECT_SFTP)
+
+  // --- CIDCO-side validation, run on every single transfer -----------------
+  // What the transfer presented…
+  presentedCompanyId String?
+  presentedIp        String?
+  presentedPath      String?
+  // …and whether each matched the company record CIDCO registered beforehand.
+  companyIdMatch     Boolean @default(false)
+  ipMatch            Boolean @default(false)
+  pathMatch          Boolean @default(false)
+  validationPassed   Boolean @default(false)
+  rejectionReason    String?
   // Parse outcome.
   sheetName     String?
   columns       Json? // header row, as read from the sheet

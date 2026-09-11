@@ -9,9 +9,9 @@ export const dynamic = 'force-dynamic';
 /**
  * GET /api/architect/sftp/me
  *
- * Everything the architect's SFTP workspace needs: their SFTP account and where
- * the handshake stands, the connection details, and what CIDCO made of every
- * workbook they have uploaded.
+ * Everything the architect's SFTP workspace needs: the company CIDCO
+ * registered for them, where to send, and CIDCO's validation result for every
+ * transfer they have made.
  */
 export async function GET(req: NextRequest) {
   try {
@@ -24,8 +24,8 @@ export async function GET(req: NextRequest) {
       where: { architectId: me.id, channel: 'SFTP' },
       orderBy: { createdAt: 'desc' },
       include: {
+        company: true,
         commLogs: { orderBy: { createdAt: 'desc' }, take: 30 },
-        validationRequests: { orderBy: { createdAt: 'desc' }, take: 5 },
         sftpUploads: {
           orderBy: { receivedAt: 'desc' },
           take: 25,
@@ -34,6 +34,7 @@ export async function GET(req: NextRequest) {
             fileName: true,
             sizeBytes: true,
             status: true,
+            mode: true,
             sheetName: true,
             rowCount: true,
             importedCount: true,
@@ -41,6 +42,14 @@ export async function GET(req: NextRequest) {
             errors: true,
             receivedAt: true,
             parsedAt: true,
+            presentedCompanyId: true,
+            presentedIp: true,
+            presentedPath: true,
+            companyIdMatch: true,
+            ipMatch: true,
+            pathMatch: true,
+            validationPassed: true,
+            rejectionReason: true,
           },
         },
       },
@@ -52,24 +61,21 @@ export async function GET(req: NextRequest) {
       accounts: accounts.map((a) => ({
         id: a.id,
         username: a.clientId,
-        passwordPrefix: a.secretPrefix,
         status: a.credentialExpiresAt.getTime() < now && a.status !== 'REVOKED' ? 'EXPIRED' : a.status,
         credentialExpiresAt: a.credentialExpiresAt,
         establishedAt: a.establishedAt,
-        whitelistedIp: a.whitelistedIp,
-        deviceInfo: a.deviceInfo,
-        enforceWhitelist: a.enforceWhitelist,
+        // What CIDCO registered — and therefore what each transfer must match.
+        company: a.company
+          ? {
+              companyId: a.company.companyId,
+              companyName: a.company.companyName,
+              architectServerIp: a.company.architectServerIp,
+              filePath: a.company.filePath,
+              active: a.company.active,
+            }
+          : null,
         uploads: a.sftpUploads,
         commLogs: a.commLogs,
-        validationRequests: a.validationRequests.map((v) => ({
-          id: v.id,
-          status: v.status,
-          presentedIp: v.presentedIp,
-          deviceInfo: v.deviceInfo,
-          reviewNote: v.reviewNote,
-          createdAt: v.createdAt,
-          reviewedAt: v.reviewedAt,
-        })),
       })),
     });
   } catch (error) {

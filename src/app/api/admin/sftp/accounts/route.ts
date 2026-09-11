@@ -1,13 +1,19 @@
 import { randomBytes } from 'crypto';
 import type { NextRequest } from 'next/server';
+import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { fail, handleError, ok } from '@/lib/api';
 import { requireCidco } from '@/lib/guards';
-import { createHandshakeSchema } from '@/lib/validation';
 import { addDays, clientIp, logComm } from '@/lib/handshake';
 import { sftpEndpoint, sha256 } from '@/lib/sftp';
 
 export const dynamic = 'force-dynamic';
+
+const issueSchema = z.object({
+  /** The registered company these credentials belong to. */
+  companyId: z.string().min(2, 'Pick the company to issue credentials for'),
+  expiresInDays: z.coerce.number().int().positive().max(3650).optional(),
+});
 
 /** SFTP user ids read better than the API's opaque client ids. */
 function generateSftpUsername() {
@@ -30,8 +36,13 @@ export async function GET(req: NextRequest) {
       orderBy: { createdAt: 'desc' },
       include: {
         architect: { select: { id: true, name: true, email: true, firmName: true } },
+        company: true,
         _count: { select: { sftpUploads: true } },
-        sftpUploads: { orderBy: { receivedAt: 'desc' }, take: 1, select: { receivedAt: true, status: true } },
+        sftpUploads: {
+          orderBy: { receivedAt: 'desc' },
+          take: 1,
+          select: { receivedAt: true, status: true, validationPassed: true },
+        },
       },
     });
 
@@ -45,10 +56,18 @@ export async function GET(req: NextRequest) {
         status: h.credentialExpiresAt.getTime() < now && h.status !== 'REVOKED' ? 'EXPIRED' : h.status,
         credentialExpiresAt: h.credentialExpiresAt,
         establishedAt: h.establishedAt,
-        whitelistedIp: h.whitelistedIp,
-        deviceInfo: h.deviceInfo,
-        enforceWhitelist: h.enforceWhitelist,
         architect: h.architect,
+        // The registration every transfer on this account is checked against.
+        company: h.company
+          ? {
+              id: h.company.id,
+              companyId: h.company.companyId,
+              companyName: h.company.companyName,
+              architectServerIp: h.company.architectServerIp,
+              filePath: h.company.filePath,
+              active: h.company.active,
+            }
+          : null,
         uploadCount: h._count.sftpUploads,
         lastUpload: h.sftpUploads[0] ?? null,
         createdAt: h.createdAt,
@@ -62,41 +81,50 @@ export async function GET(req: NextRequest) {
 /**
  * POST /api/admin/sftp/accounts
  *
- * CIDCO issues an architect an SFTP user id and password. The password is
- * returned exactly once — this is what the officer emails over.
+ * Step two: issue an SFTP user id and password against a company CIDCO has
+ * already registered. The password is returned exactly once — this is the
+ * bundle the officer emails over, including the designated IP to send to.
  */
 export async function POST(req: NextRequest) {
   try {
     const guard = await requireCidco(req);
     if ('error' in guard) return guard.error;
 
-    const data = createHandshakeSchema.parse(await req.json());
+    const data = issueSchema.parse(await req.json());
 
-    const architect = data.architectId
-      ? await prisma.user.findUnique({ where: { id: data.architectId } })
-      : await prisma.user.findUnique({ where: { email: data.architectEmail!.toLowerCase() } });
-
-    if (!architect) return fail('Architect not found', 404);
-    if (architect.role !== 'ARCHITECT') return fail('That user is not an architect', 422);
-
-    const credentialExpiresAt = data.expiryDate ?? addDays(new Date(), data.expiresInDays ?? 30);
-    if (credentialExpiresAt.getTime() <= Date.now()) {
-      return fail('Credential expiry must be in the future', 422);
+    const company = await prisma.company.findUnique({
+      where: { companyId: data.companyId },
+      include: { architect: true },
+    });
+    if (!company) {
+      return fail(`No company registered with id "${data.companyId}". Register the company first.`, 404);
     }
+    if (!company.active) return fail('That company registration is inactive', 409);
+    if (!company.architect) {
+      return fail('Link an architect account to the company before issuing credentials', 422);
+    }
+
+    const credentialExpiresAt = addDays(new Date(), data.expiresInDays ?? 365);
 
     const username = generateSftpUsername();
     const { secret, secretHash, secretPrefix } = generateSftpPassword();
 
     const handshake = await prisma.architectHandshake.create({
       data: {
-        architectId: architect.id,
+        architectId: company.architect.id,
         channel: 'SFTP',
+        companyRecordId: company.id,
         clientId: username,
         secretHash,
         secretPrefix,
         credentialExpiresAt,
         createdById: guard.user.id,
-        status: 'PENDING',
+        // The company registration is CIDCO's manual approval, so the channel
+        // is open from here — every transfer is still validated individually.
+        status: 'ESTABLISHED',
+        establishedAt: new Date(),
+        whitelistedIp: company.architectServerIp,
+        whitelistedAt: new Date(),
       },
     });
 
@@ -105,26 +133,38 @@ export async function POST(req: NextRequest) {
       direction: 'ADMIN_TO_ARCHITECT',
       event: 'SFTP_CREDENTIALS_ISSUED',
       statusCode: 201,
-      detail: `SFTP user id issued to ${architect.email}; valid until ${credentialExpiresAt.toISOString()}`,
+      detail:
+        `SFTP user id issued to ${company.architect.email} for ${company.companyName} (${company.companyId}); ` +
+        `data accepted from ${company.architectServerIp} at "${company.filePath}"; ` +
+        `valid until ${credentialExpiresAt.toISOString()}`,
       ip: clientIp(req),
     });
+
+    const endpoint = sftpEndpoint(req.headers.get('host')?.split(':')[0]);
 
     return ok(
       {
         message:
-          'SFTP credentials issued. Email this user id and password to the architect — the password is shown only once.',
+          'SFTP credentials issued. Email this to the architect — the password is shown only once.',
         account: {
           id: handshake.id,
           status: handshake.status,
-          architect: { id: architect.id, name: architect.name, email: architect.email },
+          architect: { id: company.architect.id, name: company.architect.name, email: company.architect.email },
           createdAt: handshake.createdAt,
         },
-        // What the architect needs to connect. No secrets beyond the password.
+        // Exactly what the officer sends: the login, the address to send to,
+        // and the path the file is taken from.
         credential: {
+          companyName: company.companyName,
+          companyId: company.companyId,
           username,
           password: secret,
+          designatedIp: endpoint.designatedIp,
+          port: endpoint.port,
+          protocol: endpoint.protocol,
+          filePath: company.filePath,
+          fileTypes: endpoint.fileTypes,
           expiryDate: credentialExpiresAt.toISOString(),
-          ...sftpEndpoint(req.headers.get('host')?.split(':')[0]),
         },
       },
       201,

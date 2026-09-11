@@ -7,6 +7,7 @@ type Row = {
   fileName: string;
   sizeBytes: number;
   status: string;
+  mode: string;
   sheetName: string | null;
   rowCount: number;
   importedCount: number;
@@ -14,18 +15,37 @@ type Row = {
   sourceIp: string | null;
   receivedAt: string;
   parsedAt: string | null;
+  presentedCompanyId: string | null;
+  presentedIp: string | null;
+  presentedPath: string | null;
+  companyIdMatch: boolean;
+  ipMatch: boolean;
+  pathMatch: boolean;
+  validationPassed: boolean;
+  rejectionReason: string | null;
   handshake: {
     id: string;
     clientId: string;
     architect: { id: string; name: string; email: string; firmName: string | null };
+    company: { companyId: string; companyName: string; architectServerIp: string; filePath: string } | null;
   };
 };
+
+/** One field of the check: what arrived, what CIDCO registered, did it match. */
+type Field = { presented: string | null; expected: string | null; match: boolean };
 
 type Detail = Row & {
   storedName: string;
   columns: Array<{ label: string; key: string }>;
   rows: Array<Record<string, unknown>>;
   errors: Array<{ row: number; error: string }>;
+  validation: {
+    passed: boolean;
+    reason: string | null;
+    companyId: Field;
+    ip: Field;
+    filePath: Field;
+  };
   handshake: Row['handshake'] & { whitelistedIp: string | null };
 };
 
@@ -37,7 +57,60 @@ const UPLOAD_STATUS: Record<string, string> = {
   PARSED: 'bg-emerald-100 text-emerald-800 border-emerald-200',
   PARTIAL: 'bg-amber-100 text-amber-800 border-amber-200',
   FAILED: 'bg-red-100 text-red-800 border-red-200',
+  REJECTED: 'bg-red-100 text-red-800 border-red-200',
 };
+
+/**
+ * The validation CIDCO ran on this transfer, field by field: what the transfer
+ * presented against what CIDCO registered for the company beforehand.
+ */
+function ValidationTable({ validation }: { validation: Detail['validation'] }) {
+  const rows: Array<[string, Field]> = [
+    ['Company id', validation.companyId],
+    ['Server IP', validation.ip],
+    ['File path', validation.filePath],
+  ];
+  return (
+    <div
+      className={`overflow-hidden rounded-lg border ${
+        validation.passed ? 'border-emerald-200 bg-emerald-50' : 'border-red-200 bg-red-50'
+      }`}
+    >
+      <div className="flex flex-wrap items-center gap-2 px-4 py-2.5">
+        <span className={`text-xs font-bold uppercase tracking-wide ${validation.passed ? 'text-emerald-800' : 'text-red-800'}`}>
+          {validation.passed ? 'Validation passed — data stored' : 'Validation failed — nothing stored'}
+        </span>
+      </div>
+      <table className="w-full text-left text-xs">
+        <thead className="bg-white/60 uppercase tracking-wide text-slate-500">
+          <tr>
+            <th className="px-4 py-2 font-medium">Field</th>
+            <th className="px-4 py-2 font-medium">Incoming</th>
+            <th className="px-4 py-2 font-medium">Registered by CIDCO</th>
+            <th className="px-4 py-2 font-medium">Match</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-white/70">
+          {rows.map(([label, f]) => (
+            <tr key={label}>
+              <td className="px-4 py-2 font-medium text-slate-700">{label}</td>
+              <td className="break-all px-4 py-2 font-mono text-slate-900">{f.presented ?? '—'}</td>
+              <td className="break-all px-4 py-2 font-mono text-slate-600">{f.expected ?? '—'}</td>
+              <td className="px-4 py-2">
+                {f.match ? (
+                  <span className="font-semibold text-emerald-700">✓ match</span>
+                ) : (
+                  <span className="font-semibold text-red-700">✕ mismatch</span>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {validation.reason && <p className="px-4 py-2.5 text-xs text-red-900">{validation.reason}</p>}
+    </div>
+  );
+}
 
 function UploadBadge({ status }: { status: string }) {
   return (
@@ -116,10 +189,11 @@ export default function SftpUploadsPanel() {
     <div className="w-full space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight text-slate-900">Delivered workbooks</h2>
+          <h2 className="text-2xl font-bold tracking-tight text-slate-900">Delivered transfers</h2>
           <p className="mt-1 text-sm text-slate-500">
-            Every Excel sheet architects have uploaded over SFTP. Open one to preview the sheet exactly
-            as it arrived, alongside what CIDCO stored from it.
+            Every file architects have sent over SFTP. Each one is validated against the company CIDCO
+            registered — company id, server address and file path — and only stored if all three match.
+            Open a transfer to see that comparison and preview the file as it arrived.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -139,7 +213,7 @@ export default function SftpUploadsPanel() {
         <p className="text-sm text-slate-500">Loading…</p>
       ) : rows.length === 0 ? (
         <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500 shadow-sm">
-          Nothing delivered yet. Workbooks appear here the moment an architect uploads one to the SFTP
+          Nothing delivered yet. Transfers appear here the moment an architect sends a file to the SFTP
           server.
         </div>
       ) : (
@@ -151,23 +225,44 @@ export default function SftpUploadsPanel() {
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-medium text-slate-900">{u.fileName}</span>
                     <UploadBadge status={u.status} />
+                    <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                      {u.mode === 'PORTAL' ? 'portal' : 'sftp'}
+                    </span>
                   </div>
                   <p className="mt-1 text-xs text-slate-500">
-                    {u.handshake.architect.name} · <span className="font-mono">{u.handshake.clientId}</span> ·{' '}
-                    {kb(u.sizeBytes)} · from {u.sourceIp ?? 'unknown'} · {fmt(u.receivedAt)}
+                    {u.handshake.company?.companyName ?? u.handshake.architect.name} ·{' '}
+                    <span className="font-mono">{u.presentedCompanyId ?? u.handshake.clientId}</span> ·{' '}
+                    {kb(u.sizeBytes)} · from {u.presentedIp ?? u.sourceIp ?? 'unknown'} · {fmt(u.receivedAt)}
+                  </p>
+                  <p className="mt-1 flex flex-wrap gap-2 text-[11px]">
+                    <span className={u.companyIdMatch ? 'text-emerald-700' : 'text-red-700'}>
+                      {u.companyIdMatch ? '✓' : '✕'} company id
+                    </span>
+                    <span className={u.ipMatch ? 'text-emerald-700' : 'text-red-700'}>
+                      {u.ipMatch ? '✓' : '✕'} IP
+                    </span>
+                    <span className={u.pathMatch ? 'text-emerald-700' : 'text-red-700'}>
+                      {u.pathMatch ? '✓' : '✕'} file path
+                    </span>
                   </p>
                 </div>
                 <div className="text-right text-xs text-slate-600">
-                  <p>
-                    <span className="font-semibold text-slate-900">{u.importedCount}</span> of {u.rowCount} rows stored
-                  </p>
-                  {u.failedCount > 0 && <p className="text-amber-700">{u.failedCount} rejected</p>}
+                  {u.validationPassed ? (
+                    <>
+                      <p>
+                        <span className="font-semibold text-slate-900">{u.importedCount}</span> of {u.rowCount} rows stored
+                      </p>
+                      {u.failedCount > 0 && <p className="text-amber-700">{u.failedCount} rejected</p>}
+                    </>
+                  ) : (
+                    <p className="font-semibold text-red-700">refused — nothing stored</p>
+                  )}
                 </div>
                 <button
                   onClick={() => open(u.id)}
                   className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
                 >
-                  {openId === u.id ? 'Close' : 'Preview sheet'}
+                  {openId === u.id ? 'Close' : 'Open'}
                 </button>
               </div>
 
@@ -177,6 +272,8 @@ export default function SftpUploadsPanel() {
                     <p className="text-sm text-slate-500">Loading the sheet…</p>
                   ) : (
                     <div className="space-y-4">
+                      <ValidationTable validation={detail.validation} />
+
                       <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-slate-600">
                         <span>
                           Sheet: <span className="font-medium text-slate-900">{detail.sheetName ?? '—'}</span>
@@ -185,6 +282,7 @@ export default function SftpUploadsPanel() {
                           Stored as <span className="font-mono">{detail.storedName}</span>
                         </span>
                         <span>Parsed {fmt(detail.parsedAt)}</span>
+                        <span>Arrived by {detail.mode === 'PORTAL' ? 'the architect portal' : 'direct SFTP'}</span>
                       </div>
 
                       {detail.errors.length > 0 && (
@@ -202,8 +300,12 @@ export default function SftpUploadsPanel() {
                         </div>
                       )}
 
-                      {detail.rows.length === 0 ? (
-                        <p className="text-sm text-slate-500">The sheet had no data rows.</p>
+                      {!detail.validation.passed ? (
+                        <p className="text-sm text-slate-500">
+                          The file was refused before it was read, so there is nothing to preview.
+                        </p>
+                      ) : detail.rows.length === 0 ? (
+                        <p className="text-sm text-slate-500">The file had no data rows.</p>
                       ) : (
                         <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
                           <table className="w-full text-left text-xs">
