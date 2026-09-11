@@ -41,7 +41,12 @@ A CIDCO officer enters four things by hand:
 | **Architect's server IP** | e.g. `203.0.113.9`. Data is only accepted from here. |
 | **File path** | e.g. `/var/aqi/exports`. Where the CSV is picked up from, and written to here. |
 
-An architect account is linked to the registration; credentials cannot be issued without one.
+The architect's email goes in the same form. **Any email is accepted** — CIDCO is creating the
+architect's account here, so if no account exists for it one is made, and the portal password is
+shown **once** for the officer to send on. That login is what the architect uses to sign in at the
+portal front page. If they lose it, **Reset portal password** on the company mints a new one.
+
+Credentials cannot be issued until an architect is linked.
 
 A registration can be corrected later (`PATCH /api/admin/sftp/companies/:id`) — the change applies
 to the very next transfer, because validation reads this record every time. Deactivating a company

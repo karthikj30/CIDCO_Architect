@@ -25,6 +25,8 @@ type Company = {
   credentials: Credential[];
 };
 
+type ArchitectLogin = { email: string; name: string; temporaryPassword?: string; created: boolean };
+
 const fmt = (d: string | null) => (d ? new Date(d).toLocaleString('en-IN') : '—');
 const INPUT = 'w-full rounded-lg border border-slate-300 px-3 py-2 text-sm';
 
@@ -39,8 +41,11 @@ export default function SftpCompaniesPanel() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [credential, setCredential] = useState<string | null>(null);
+  // The portal login CIDCO just created for the architect — shown once.
+  const [architectLogin, setArchitectLogin] = useState<ArchitectLogin | null>(null);
   const [busy, setBusy] = useState(false);
   const [issuingFor, setIssuingFor] = useState<string | null>(null);
+  const [resettingFor, setResettingFor] = useState<string | null>(null);
 
   const [form, setForm] = useState({
     companyName: '',
@@ -77,6 +82,7 @@ export default function SftpCompaniesPanel() {
     setError(null);
     setNotice(null);
     setCredential(null);
+    setArchitectLogin(null);
     try {
       const res = await fetch('/api/admin/sftp/companies', {
         method: 'POST',
@@ -93,6 +99,7 @@ export default function SftpCompaniesPanel() {
       const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? 'Could not register the company');
       setNotice(json.data.message);
+      if (json.data.architectAccount?.temporaryPassword) setArchitectLogin(json.data.architectAccount);
       setForm({ companyName: '', companyId: '', architectServerIp: '', filePath: '', architectEmail: '', notes: '' });
       await load();
     } catch (err) {
@@ -107,6 +114,7 @@ export default function SftpCompaniesPanel() {
     setIssuingFor(companyId);
     setError(null);
     setNotice(null);
+    setArchitectLogin(null);
     setCredential(null);
     try {
       const res = await fetch('/api/admin/sftp/accounts', {
@@ -123,6 +131,26 @@ export default function SftpCompaniesPanel() {
       setError((err as Error).message);
     } finally {
       setIssuingFor(null);
+    }
+  }
+
+  /** Re-issue the portal password when the architect has lost it. */
+  async function resetLogin(c: Company) {
+    setResettingFor(c.id);
+    setError(null);
+    setNotice(null);
+    setCredential(null);
+    setArchitectLogin(null);
+    try {
+      const res = await fetch(`/api/admin/sftp/companies/${c.id}/reset-login`, { method: 'POST' });
+      const json = await readJson(res);
+      if (!res.ok) throw new Error(json.error ?? 'Could not reset the login');
+      setNotice(json.data.message);
+      setArchitectLogin(json.data.architectAccount);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setResettingFor(null);
     }
   }
 
@@ -155,6 +183,26 @@ export default function SftpCompaniesPanel() {
 
       {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>}
       {notice && <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{notice}</div>}
+
+      {architectLogin?.temporaryPassword && (
+        <div className="space-y-2 rounded-xl border border-blue-200 bg-blue-50 p-5">
+          <p className="text-sm font-medium text-blue-900">
+            {architectLogin.created ? 'Portal account created for the architect' : 'New portal password'} — send this
+            to them. The password is shown only once.
+          </p>
+          <p className="text-xs text-blue-800">
+            They sign in with it at the portal front page, then open the SFTP dashboard.
+          </p>
+          <CopyField
+            label="Architect portal login"
+            value={JSON.stringify(
+              { email: architectLogin.email, password: architectLogin.temporaryPassword, signInAt: '/' },
+              null,
+              2,
+            )}
+          />
+        </div>
+      )}
 
       {credential && (
         <div className="space-y-2 rounded-xl border border-emerald-200 bg-emerald-50 p-5">
@@ -194,6 +242,9 @@ export default function SftpCompaniesPanel() {
               Architect account email
             </label>
             <input id="co-arch" type="email" value={form.architectEmail} onChange={set('architectEmail')} className={INPUT} placeholder="architect@example.com" />
+            <p className="mt-1 text-[11px] text-slate-400">
+              Any email. A portal account is created for it and the password shown once.
+            </p>
           </div>
           <div>
             <label htmlFor="co-notes" className="mb-1 block text-xs font-medium text-slate-600">Notes (optional)</label>
@@ -246,9 +297,10 @@ export default function SftpCompaniesPanel() {
                       <>
                         {c.architect.name}
                         <span className="block text-xs text-slate-500">{c.architect.email}</span>
+                        <span className="block text-[11px] text-slate-400">portal login</span>
                       </>
                     ) : (
-                      <span className="text-amber-700">not linked — link one before issuing credentials</span>
+                      <span className="text-amber-700">not linked — add an architect email before issuing credentials</span>
                     )}
                   </dd>
                 </div>
@@ -277,6 +329,13 @@ export default function SftpCompaniesPanel() {
                   className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-700 disabled:opacity-40"
                 >
                   {issuingFor === c.companyId ? 'Issuing…' : 'Issue SFTP credentials'}
+                </button>
+                <button
+                  onClick={() => resetLogin(c)}
+                  disabled={resettingFor === c.id || !c.architect}
+                  className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                >
+                  {resettingFor === c.id ? 'Resetting…' : 'Reset portal password'}
                 </button>
                 <button
                   onClick={() => toggleActive(c)}

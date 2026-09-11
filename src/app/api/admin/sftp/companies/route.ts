@@ -4,6 +4,7 @@ import { prisma } from '@/lib/prisma';
 import { fail, handleError, ok } from '@/lib/api';
 import { requireCidco } from '@/lib/guards';
 import { normaliseIp, normalisePath } from '@/lib/sftp';
+import { resolveArchitectAccount } from '@/lib/architectAccounts';
 
 export const dynamic = 'force-dynamic';
 
@@ -92,12 +93,23 @@ export async function POST(req: NextRequest) {
     const existing = await prisma.company.findUnique({ where: { companyId: data.companyId } });
     if (existing) return fail(`Company id "${data.companyId}" is already registered`, 409);
 
+    // CIDCO is creating the architect's account here, so any email is fine —
+    // one is made for it if it does not exist yet.
     let architectId: string | null = null;
+    let architectAccount: { email: string; name: string; temporaryPassword?: string; created: boolean } | null = null;
     if (data.architectEmail) {
-      const architect = await prisma.user.findUnique({ where: { email: data.architectEmail.toLowerCase() } });
-      if (!architect) return fail('No architect account with that email', 404);
-      if (architect.role !== 'ARCHITECT') return fail('That user is not an architect', 422);
-      architectId = architect.id;
+      const resolved = await resolveArchitectAccount({
+        email: data.architectEmail,
+        companyName: data.companyName,
+      });
+      if (!resolved.ok) return fail(resolved.reason, 422);
+      architectId = resolved.architect.id;
+      architectAccount = {
+        email: resolved.architect.email,
+        name: resolved.architect.name,
+        created: resolved.created,
+        ...(resolved.created ? { temporaryPassword: resolved.temporaryPassword } : {}),
+      };
     }
 
     const company = await prisma.company.create({
@@ -117,9 +129,12 @@ export async function POST(req: NextRequest) {
 
     return ok(
       {
-        message:
-          'Company registered. Issue SFTP credentials against it, then email the user id, password and designated IP to the architect.',
+        message: architectAccount?.created
+          ? 'Company registered and a portal account created for the architect. Send them the login below, then issue their SFTP credentials.'
+          : 'Company registered. Issue SFTP credentials against it, then email the user id, password and designated IP to the architect.',
         company,
+        // Shown once: the portal login CIDCO just created for the architect.
+        architectAccount,
       },
       201,
     );

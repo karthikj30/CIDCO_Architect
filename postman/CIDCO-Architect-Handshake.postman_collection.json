@@ -88,6 +88,10 @@
     {
       "key": "sftpDesignatedIp",
       "value": "localhost"
+    },
+    {
+      "key": "architectPortalPassword",
+      "value": ""
     }
   ],
   "item": [
@@ -872,9 +876,13 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('registered', () => pm.response.to.have.status(201));",
-                  "const co = pm.response.json().data.company;",
-                  "pm.collectionVariables.set('companyRecordId', co.id);",
-                  "console.log(`${co.companyName} (${co.companyId}) accepts data from ${co.architectServerIp} at ${co.filePath}`);"
+                  "const d = pm.response.json().data;",
+                  "pm.collectionVariables.set('companyRecordId', d.company.id);",
+                  "if (d.architectAccount?.temporaryPassword) {",
+                  "  pm.collectionVariables.set('architectPortalPassword', d.architectAccount.temporaryPassword);",
+                  "  console.log(`architect portal login: ${d.architectAccount.email} / ${d.architectAccount.temporaryPassword}`);",
+                  "}",
+                  "console.log(`${d.company.companyName} (${d.company.companyId}) accepts data from ${d.company.architectServerIp} at ${d.company.filePath}`);"
                 ]
               }
             }
@@ -903,7 +911,29 @@
                 "companies"
               ]
             },
-            "description": "Step one, done by hand before any credentials exist. What you enter here is what every later transfer is validated against: the company id quoted, the address the data must arrive from, and the path it is taken from."
+            "description": "Step one, done by hand before any credentials exist. What you enter here is what every later transfer is validated against: the company id quoted, the address the data must arrive from, and the path it is taken from. architectEmail accepts ANY email \u2014 CIDCO is creating the architect's portal account, so one is made for it and the password is returned once in architectAccount.temporaryPassword."
+          }
+        },
+        {
+          "name": "Reset the architect portal password",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/sftp/companies/{{companyRecordId}}/reset-login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "sftp",
+                "companies",
+                "{{companyRecordId}}",
+                "reset-login"
+              ]
+            },
+            "description": "The architect lost the portal password CIDCO created for them. Mints a new one and returns it once."
           }
         },
         {

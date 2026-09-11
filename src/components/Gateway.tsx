@@ -226,23 +226,26 @@ export default function Gateway() {
       </div>
 
       <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-        {/* Who is signing in */}
-        <div className="grid grid-cols-2 gap-2 rounded-lg bg-slate-100 p-1">
-          {(['CIDCO_OFFICER', 'ARCHITECT'] as Role[]).map((r) => (
-            <button
-              key={r}
-              type="button"
-              onClick={() => setRole(r)}
-              className={`rounded-md px-3 py-2 text-sm font-semibold transition-colors ${
-                role === r ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              {r === 'CIDCO_OFFICER' ? 'CIDCO officer' : 'Architect'}
-            </button>
-          ))}
-        </div>
+        {/* Which kind of account to create. Signing in does not need this —
+            the account itself decides which dashboards you get. */}
+        {mode === 'signup' && (
+          <div className="grid grid-cols-2 gap-2 rounded-lg bg-slate-100 p-1">
+            {(['CIDCO_OFFICER', 'ARCHITECT'] as Role[]).map((r) => (
+              <button
+                key={r}
+                type="button"
+                onClick={() => setRole(r)}
+                className={`rounded-md px-3 py-2 text-sm font-semibold transition-colors ${
+                  role === r ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                {r === 'CIDCO_OFFICER' ? 'CIDCO officer' : 'Architect'}
+              </button>
+            ))}
+          </div>
+        )}
 
-        <div className="mt-5 flex gap-4 border-b border-slate-200">
+        <div className="flex gap-4 border-b border-slate-200">
           {(['signin', 'signup'] as Mode[]).map((m) => (
             <button
               key={m}
@@ -311,7 +314,7 @@ export default function Gateway() {
 
           <p className="text-xs leading-relaxed text-slate-400">
             {mode === 'signin'
-              ? 'After signing in you choose API or SFTP, and that dashboard opens.'
+              ? 'Use the email and password for your account — CIDCO officers, and architects using the login CIDCO created for them. After signing in you choose API or SFTP, and that dashboard opens.'
               : role === 'ARCHITECT'
                 ? 'Architects whom CIDCO has already emailed credentials should sign in on the channel dashboard instead — the credentials set up the account.'
                 : 'CIDCO officers manage both channels from their dashboards.'}

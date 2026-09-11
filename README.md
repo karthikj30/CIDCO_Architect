@@ -147,7 +147,9 @@ CIDCO validates every single transfer, previews the file and imports the rows. P
 
 - **i. CIDCO registers the company by hand** in *Companies*: company name, **company id**, the
   **architect's server IP** (the only address data is accepted from) and the **file path** their CSV
-  is taken from. An architect account is linked to it.
+  is taken from, plus the architect's email. **Any email is accepted** — CIDCO is creating the
+  architect's account, so one is made for it and the portal password shown once to pass on. *Reset
+  portal password* re-issues it if they lose it.
 
 *Then:*
 

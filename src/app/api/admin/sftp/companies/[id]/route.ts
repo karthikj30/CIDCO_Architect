@@ -4,6 +4,7 @@ import { prisma } from '@/lib/prisma';
 import { fail, handleError, ok } from '@/lib/api';
 import { requireCidco } from '@/lib/guards';
 import { normaliseIp, normalisePath } from '@/lib/sftp';
+import { resolveArchitectAccount } from '@/lib/architectAccounts';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,13 +35,23 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     if (!company) return fail('Company not found', 404);
 
     let architectId = company.architectId;
+    let architectAccount: { email: string; name: string; temporaryPassword?: string; created: boolean } | null = null;
     if (body.architectEmail === null) {
       architectId = null;
     } else if (body.architectEmail) {
-      const architect = await prisma.user.findUnique({ where: { email: body.architectEmail.toLowerCase() } });
-      if (!architect) return fail('No architect account with that email', 404);
-      if (architect.role !== 'ARCHITECT') return fail('That user is not an architect', 422);
-      architectId = architect.id;
+      // Any email is accepted — CIDCO creates the architect's account.
+      const resolved = await resolveArchitectAccount({
+        email: body.architectEmail,
+        companyName: body.companyName ?? company.companyName,
+      });
+      if (!resolved.ok) return fail(resolved.reason, 422);
+      architectId = resolved.architect.id;
+      architectAccount = {
+        email: resolved.architect.email,
+        name: resolved.architect.name,
+        created: resolved.created,
+        ...(resolved.created ? { temporaryPassword: resolved.temporaryPassword } : {}),
+      };
     }
 
     const updated = await prisma.company.update({
@@ -56,7 +67,13 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       include: { architect: { select: { id: true, name: true, email: true } } },
     });
 
-    return ok({ message: 'Registration updated. It applies to the next transfer.', company: updated });
+    return ok({
+      message: architectAccount?.created
+        ? 'Registration updated and a portal account created for the architect. Send them the login below.'
+        : 'Registration updated. It applies to the next transfer.',
+      company: updated,
+      architectAccount,
+    });
   } catch (error) {
     return handleError(error);
   }
