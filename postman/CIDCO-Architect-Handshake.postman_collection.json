@@ -92,6 +92,10 @@
     {
       "key": "architectPortalPassword",
       "value": ""
+    },
+    {
+      "key": "architectPortalEmail",
+      "value": "cidco@gmail.com"
     }
   ],
   "item": [
@@ -878,10 +882,6 @@
                   "pm.test('registered', () => pm.response.to.have.status(201));",
                   "const d = pm.response.json().data;",
                   "pm.collectionVariables.set('companyRecordId', d.company.id);",
-                  "if (d.architectAccount?.temporaryPassword) {",
-                  "  pm.collectionVariables.set('architectPortalPassword', d.architectAccount.temporaryPassword);",
-                  "  console.log(`architect portal login: ${d.architectAccount.email} / ${d.architectAccount.temporaryPassword}`);",
-                  "}",
                   "console.log(`${d.company.companyName} (${d.company.companyId}) accepts data from ${d.company.architectServerIp} at ${d.company.filePath}`);"
                 ]
               }
@@ -911,29 +911,7 @@
                 "companies"
               ]
             },
-            "description": "Step one, done by hand before any credentials exist. What you enter here is what every later transfer is validated against: the company id quoted, the address the data must arrive from, and the path it is taken from. architectEmail accepts ANY email \u2014 CIDCO is creating the architect's portal account, so one is made for it and the password is returned once in architectAccount.temporaryPassword."
-          }
-        },
-        {
-          "name": "Reset the architect portal password",
-          "request": {
-            "method": "POST",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/admin/sftp/companies/{{companyRecordId}}/reset-login",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "admin",
-                "sftp",
-                "companies",
-                "{{companyRecordId}}",
-                "reset-login"
-              ]
-            },
-            "description": "The architect lost the portal password CIDCO created for them. Mints a new one and returns it once."
+            "description": "Step one, done by hand before any credentials exist. What you enter here is what every later transfer is validated against: the company id quoted, the address the data must arrive from, and the path it is taken from. architectEmail is stored as contact detail only \u2014 no account is created, because every architect signs in with the shared CIDCO portal login (cidco@gmail.com / 123456)."
           }
         },
         {
@@ -1152,6 +1130,48 @@
                 }
               ]
             }
+          }
+        },
+        {
+          "name": "Architect: connect with the SFTP credentials",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('connected', () => pm.response.to.have.status(200));",
+                  "const a = pm.response.json().data.account;",
+                  "console.log(`connected as ${a.company.companyName} (${a.company.companyId}), path ${a.company.filePath}`);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{sftpUsername}}\",\n  \"password\": \"{{sftpPassword}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/architect/sftp/connect",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "architect",
+                "sftp",
+                "connect"
+              ]
+            },
+            "description": "Architects share one portal login, so the session cannot say which company they are. Sign in first as cidco@gmail.com / 123456, then connect with the company SFTP user id and password \u2014 that pair is the identity."
           }
         }
       ]

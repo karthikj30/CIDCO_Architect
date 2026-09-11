@@ -11,13 +11,13 @@ type Account = {
   status: string;
   credentialExpiresAt: string;
   establishedAt: string | null;
-  architect: { id: string; name: string; email: string; firmName: string | null };
   company: {
     id: string;
     companyId: string;
     companyName: string;
     architectServerIp: string;
     filePath: string;
+    contactEmail: string | null;
     active: boolean;
   } | null;
   uploadCount: number;
@@ -119,7 +119,7 @@ export default function SftpAccountsPanel() {
                       ) : (
                         <span className="text-xs text-amber-700">no registration — transfers are refused</span>
                       )}
-                      <p className="text-xs text-slate-400">{a.architect.email}</p>
+                      {a.company?.contactEmail && <p className="text-xs text-slate-400">{a.company.contactEmail}</p>}
                     </td>
                     <td className="px-5 py-3 font-mono text-xs text-slate-600">{a.company?.architectServerIp ?? '—'}</td>
                     <td className="px-5 py-3 break-all font-mono text-xs text-slate-600">{a.company?.filePath ?? '—'}</td>

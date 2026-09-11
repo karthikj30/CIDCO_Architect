@@ -365,9 +365,11 @@ export type ImportOutcome = {
  */
 export async function importRows(params: {
   architectId: string;
+  /** The registered company the readings came from, for attribution. */
+  companyRecordId?: string | null;
   rows: Array<Record<string, unknown>>;
 }): Promise<ImportOutcome> {
-  const { architectId, rows } = params;
+  const { architectId, companyRecordId, rows } = params;
   const errors: Array<{ row: number; error: string }> = [];
   let importedCount = 0;
 
@@ -385,7 +387,7 @@ export async function importRows(params: {
       }
 
       const input = reportSchema.parse(raw);
-      await createReport({ userId: architectId, source: 'SFTP', input });
+      await createReport({ userId: architectId, source: 'SFTP', input, companyRecordId });
       importedCount++;
     } catch (error) {
       errors.push({ row: sheetRow, error: describeError(error) });
@@ -477,7 +479,11 @@ export async function ingestTransfer(params: {
 
   try {
     const sheet = await parseDataFile(buffer, fileName);
-    const outcome = await importRows({ architectId: handshake.architectId, rows: sheet.rows });
+    const outcome = await importRows({
+      architectId: handshake.architectId,
+      companyRecordId: company?.id ?? null,
+      rows: sheet.rows,
+    });
 
     const status =
       outcome.importedCount === 0

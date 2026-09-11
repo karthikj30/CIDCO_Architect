@@ -105,15 +105,6 @@ async function main() {
   check(login.status === 200, 'officer signed in');
 
   const archEmail = `sftp-arch-${stamp}@studio.in`;
-  await api('/api/auth/register', {
-    method: 'POST',
-    body: JSON.stringify({ email: archEmail, password: 'Placeholder123', name: 'SFTP architect', role: 'ARCHITECT' }),
-  });
-  cookie = '';
-  await api('/api/auth/login', {
-    method: 'POST',
-    body: JSON.stringify({ email: 'officer@cidco.example', password: 'Password123' }),
-  });
 
   const companyId = `CIDCO-CO-${stamp}`;
   const registered = await api('/api/admin/sftp/companies', {
@@ -128,6 +119,11 @@ async function main() {
   });
   check(registered.status === 201, `company registered (got ${registered.status})`);
   check(registered.json?.data?.company?.filePath === FILE_PATH, 'the file path is stored on the registration');
+  check(registered.json?.data?.company?.contactEmail === archEmail, 'the architect email is stored as contact detail');
+  check(
+    (await prisma.user.findUnique({ where: { email: archEmail } })) === null,
+    'registering did NOT create an account for that email',
+  );
 
   // Credentials cannot exist without a registration.
   const orphan = await api('/api/admin/sftp/accounts', {
@@ -156,8 +152,8 @@ async function main() {
   check(!!conn, 'the registered credentials connect straight away — no separate approval step');
   if (!conn) throw new Error('cannot continue without a session');
 
-  const architect = await prisma.user.findUniqueOrThrow({ where: { email: archEmail } });
-  const before = await prisma.report.count({ where: { userId: architect.id } });
+  const companyRow = await prisma.company.findUniqueOrThrow({ where: { companyId } });
+  const before = await prisma.report.count({ where: { companyRecordId: companyRow.id } });
 
   await put(conn, `${FILE_PATH}/readings.csv`, csv(3));
   conn.end();
@@ -180,8 +176,12 @@ async function main() {
   check(v.filePath.presented === FILE_PATH && v.filePath.expected === FILE_PATH, 'the officer sees the file path, incoming vs registered');
   check(detail.json.data.upload.rows.length === 4, 'the CSV is previewable row by row');
 
-  const after = await prisma.report.count({ where: { userId: architect.id } });
+  const after = await prisma.report.count({ where: { companyRecordId: companyRow.id } });
   check(after - before === 3, `3 readings landed in the database (got ${after - before})`);
+  check(
+    (await prisma.report.count({ where: { companyRecordId: companyRow.id, source: 'SFTP' } })) === 3,
+    'the readings are attributed to the registered company',
+  );
 
   console.log('== a transfer that does not match is refused ==');
   const conn2 = await connect(cred.username, cred.password);
@@ -190,7 +190,7 @@ async function main() {
   conn2.end();
   await new Promise((r) => setTimeout(r, 2500));
 
-  const afterBad = await prisma.report.count({ where: { userId: architect.id } });
+  const afterBad = await prisma.report.count({ where: { companyRecordId: companyRow.id } });
   const rejected = await prisma.sftpUpload.findFirst({
     where: { handshake: { clientId: cred.username }, presentedPath: '/somewhere/else' },
     orderBy: { receivedAt: 'desc' },
@@ -206,14 +206,29 @@ async function main() {
   check((await connect(cred.username, cred.password)) === null, 'a connection from an unregistered address is refused');
   await prisma.company.update({ where: { companyId }, data: { architectServerIp: ARCHITECT_IP } });
 
-  console.log('== the architect sees the same result ==');
+  console.log('== the architect signs in with the shared CIDCO login and connects ==');
   cookie = '';
-  await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: archEmail, password: 'Placeholder123' }) });
-  const mePage = await api('/api/architect/sftp/me');
-  const account = mePage.json.data.accounts[0];
-  check(account?.company?.companyId === companyId, 'the architect sees the company CIDCO registered');
+  const shared = await api('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ email: 'cidco@gmail.com', password: '123456' }),
+  });
+  check(shared.status === 200, 'the shared portal login works for architects');
+
+  const wrongConnect = await api('/api/architect/sftp/connect', {
+    method: 'POST',
+    body: JSON.stringify({ username: cred.username, password: 'not-the-password' }),
+  });
+  check(wrongConnect.status === 401, `a wrong SFTP password cannot connect (got ${wrongConnect.status})`);
+
+  const connected = await api('/api/architect/sftp/connect', {
+    method: 'POST',
+    body: JSON.stringify({ username: cred.username, password: cred.password }),
+  });
+  check(connected.status === 200, `connecting with the SFTP credentials works (got ${connected.status})`);
+  const account = connected.json?.data?.account;
+  check(account?.company?.companyId === companyId, 'connecting identifies the right company');
   check(account?.company?.filePath === FILE_PATH, 'the architect sees the registered file path');
-  check(mePage.json.data.endpoint.designatedIp !== undefined, 'the architect sees the designated IP to send to');
+  check(connected.json?.data?.endpoint?.designatedIp !== undefined, 'the architect sees the designated IP to send to');
   check(account?.uploads?.some((u: { validationPassed: boolean }) => u.validationPassed), 'the architect sees the accepted transfer');
   check(account?.uploads?.some((u: { validationPassed: boolean }) => !u.validationPassed), 'the architect sees the refused one, with its reason');
 

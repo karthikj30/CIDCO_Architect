@@ -60,6 +60,19 @@ async function main() {
     },
   });
 
+  // The one login CIDCO hands to every architect. They sign in with this, then
+  // identify their company with the SFTP user id and password CIDCO issued.
+  await prisma.user.upsert({
+    where: { email: 'cidco@gmail.com' },
+    update: { passwordHash: await bcrypt.hash('123456', 10) },
+    create: {
+      email: 'cidco@gmail.com',
+      name: 'CIDCO Architect Access',
+      passwordHash: await bcrypt.hash('123456', 10),
+      role: 'ARCHITECT',
+    },
+  });
+
   await prisma.user.upsert({
     where: { email: 'officer@cidco.example' },
     update: {},
@@ -171,7 +184,8 @@ async function main() {
   }
 
   console.log('Seed complete.');
-  console.log('  Architect login : architect@example.com / Password123');
+  console.log('  Architect login : cidco@gmail.com / 123456   (shared, for every architect)');
+  console.log('  Demo architect  : architect@example.com / Password123');
   console.log('  Officer login   : officer@cidco.example / Password123');
   console.log('  Connect demos   :');
   for (const demo of DEMO_HANDSHAKES) {

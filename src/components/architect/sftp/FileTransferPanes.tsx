@@ -39,6 +39,8 @@ type LocalEntry = {
 
 type Props = {
   username: string;
+  /** Held by the workspace from the connect form above. */
+  password: string;
   designatedIp: string;
   port: number;
   registeredPath: string;
@@ -58,13 +60,13 @@ type PickerWindow = Window & {
 
 export default function FileTransferPanes({
   username,
+  password,
   designatedIp,
   port,
   registeredPath,
   delivered,
   onTransferred,
 }: Props) {
-  const [password, setPassword] = useState('');
   const [sourcePath, setSourcePath] = useState(registeredPath);
   const [localName, setLocalName] = useState<string | null>(null);
   const [entries, setEntries] = useState<LocalEntry[]>([]);
@@ -137,16 +139,16 @@ export default function FileTransferPanes({
   }
 
   /** The actual transfer: one file, validated by CIDCO before anything is kept. */
+  const sending = useRef(false);
   const send = useCallback(
     async (file: File) => {
-      if (!password) {
-        note(false, 'Enter the password CIDCO emailed you before sending.');
-        return;
-      }
+      // A second click (or a drop landing on top of one) must not resend.
+      if (sending.current) return;
       if (!isSendable(file.name)) {
         note(false, `${file.name} is not a .csv or .xlsx file.`);
         return;
       }
+      sending.current = true;
       setBusy(true);
       try {
         const body = new FormData();
@@ -167,6 +169,7 @@ export default function FileTransferPanes({
       } catch (err) {
         note(false, `${file.name} — ${(err as Error).message}`);
       } finally {
+        sending.current = false;
         setBusy(false);
       }
     },
@@ -190,62 +193,23 @@ export default function FileTransferPanes({
     if (file) await send(file);
   }
 
-  const connected = !!password;
+  const connected = !!username && !!password;
 
   return (
     <div className="space-y-4">
-      {/* The connect bar — the same four things WinSCP asks for */}
+      {/* Where the file is taken from — validated against the registration */}
       <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <div>
-            <label htmlFor="tp-host" className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-              Designated IP
-            </label>
-            <input
-              id="tp-host"
-              readOnly
-              value={`${designatedIp}:${port}`}
-              className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-sm text-slate-700"
-            />
-          </div>
-          <div>
-            <label htmlFor="tp-user" className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-              User id
-            </label>
-            <input
-              id="tp-user"
-              readOnly
-              value={username}
-              className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-sm text-slate-700"
-            />
-          </div>
-          <div>
-            <label htmlFor="tp-pass" className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-              Password
-            </label>
-            <input
-              id="tp-pass"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="from CIDCO's email"
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500"
-            />
-          </div>
-          <div>
-            <label htmlFor="tp-path" className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-              File path
-            </label>
-            <input
-              id="tp-path"
-              value={sourcePath}
-              onChange={(e) => setSourcePath(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500"
-            />
-          </div>
-        </div>
+        <label htmlFor="tp-path" className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+          File path this is taken from
+        </label>
+        <input
+          id="tp-path"
+          value={sourcePath}
+          onChange={(e) => setSourcePath(e.target.value)}
+          className="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500"
+        />
         <p className="mt-2 text-xs text-slate-500">
-          CIDCO checks all three — your company id, the address this comes from, and the file path —
+          CIDCO checks all three — your company id, the address this comes from, and this file path —
           against your registration on every transfer.
         </p>
       </div>
@@ -344,8 +308,7 @@ export default function FileTransferPanes({
           <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 bg-slate-50 px-4 py-2.5">
             <span className="text-xs font-semibold uppercase tracking-wide text-violet-700">CIDCO</span>
             <span className="min-w-0 flex-1 truncate font-mono text-xs text-slate-500">
-              {designatedIp}:{port}
-              {sourcePath}
+              {designatedIp}:{port} · {sourcePath}
             </span>
           </div>
 
@@ -355,7 +318,7 @@ export default function FileTransferPanes({
               <p className="px-2 py-8 text-center text-xs text-slate-400">
                 {connected
                   ? 'Drop a .csv here, or use Send → on the left.'
-                  : 'Enter your password above, then drop a .csv here.'}
+                  : 'Connect above, then drop a .csv here.'}
               </p>
             ) : (
               <ul className="space-y-0.5">

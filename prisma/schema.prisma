@@ -169,6 +169,8 @@ model Report {
   temperature         Float? // °C
   humidity            Float? // % RH
   integrationMethod   String? // Data Source / Integration Method (e.g. "Automated API (3h)")
+  /// Which registered company delivered this reading (SFTP channel).
+  companyRecordId     String?
   otherParams         Json? // Other applicable environmental parameters
   receivedAt          DateTime @default(now()) // Data Receipt Timestamp (when CIDCO stored it)
 
@@ -181,6 +183,7 @@ model Report {
 
   user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   project     Project?     @relation(fields: [projectId], references: [id])
+  company     Company?     @relation(fields: [companyRecordId], references: [id], onDelete: SetNull)
   attachments Attachment[]
 
   @@index([userId])
@@ -188,6 +191,7 @@ model Report {
   @@index([status])
   @@index([monitoringStationId])
   @@index([projectSiteId])
+  @@index([companyRecordId])
   @@map("reports")
 }
 
@@ -393,7 +397,12 @@ model Company {
   architectServerIp String
   /// Where the architect's CSV is picked up from, and written to on CIDCO.
   filePath          String
-  /// The architect user these credentials belong to, once one is linked.
+  /// The architect's contact email, exactly as CIDCO typed it. Stored as
+  /// data — architects sign in with the shared CIDCO portal login, so no
+  /// account is created for it.
+  contactEmail      String?
+  /// Optional link to a portal user, kept for registrations made before the
+  /// shared login existed. Nothing requires it.
   architectId       String?
   notes             String?
   active            Boolean  @default(true)
@@ -403,6 +412,7 @@ model Company {
 
   architect  User?                @relation("CompanyArchitect", fields: [architectId], references: [id], onDelete: SetNull)
   handshakes ArchitectHandshake[]
+  reports    Report[]
 
   @@index([architectId])
   @@map("companies")

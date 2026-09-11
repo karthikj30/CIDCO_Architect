@@ -4,7 +4,6 @@ import { prisma } from '@/lib/prisma';
 import { fail, handleError, ok } from '@/lib/api';
 import { requireCidco } from '@/lib/guards';
 import { normaliseIp, normalisePath } from '@/lib/sftp';
-import { resolveArchitectAccount } from '@/lib/architectAccounts';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,26 +33,6 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     const company = await prisma.company.findUnique({ where: { id } });
     if (!company) return fail('Company not found', 404);
 
-    let architectId = company.architectId;
-    let architectAccount: { email: string; name: string; temporaryPassword?: string; created: boolean } | null = null;
-    if (body.architectEmail === null) {
-      architectId = null;
-    } else if (body.architectEmail) {
-      // Any email is accepted — CIDCO creates the architect's account.
-      const resolved = await resolveArchitectAccount({
-        email: body.architectEmail,
-        companyName: body.companyName ?? company.companyName,
-      });
-      if (!resolved.ok) return fail(resolved.reason, 422);
-      architectId = resolved.architect.id;
-      architectAccount = {
-        email: resolved.architect.email,
-        name: resolved.architect.name,
-        created: resolved.created,
-        ...(resolved.created ? { temporaryPassword: resolved.temporaryPassword } : {}),
-      };
-    }
-
     const updated = await prisma.company.update({
       where: { id },
       data: {
@@ -62,18 +41,17 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         filePath: body.filePath ? normalisePath(body.filePath) : undefined,
         notes: body.notes === undefined ? undefined : body.notes,
         active: body.active ?? undefined,
-        architectId,
+        // Contact detail only; null clears it.
+        contactEmail:
+          body.architectEmail === undefined
+            ? undefined
+            : body.architectEmail === null
+              ? null
+              : body.architectEmail.trim().toLowerCase(),
       },
-      include: { architect: { select: { id: true, name: true, email: true } } },
     });
 
-    return ok({
-      message: architectAccount?.created
-        ? 'Registration updated and a portal account created for the architect. Send them the login below.'
-        : 'Registration updated. It applies to the next transfer.',
-      company: updated,
-      architectAccount,
-    });
+    return ok({ message: 'Registration updated. It applies to the next transfer.', company: updated });
   } catch (error) {
     return handleError(error);
   }

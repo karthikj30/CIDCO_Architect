@@ -6,6 +6,7 @@ import { fail, handleError, ok } from '@/lib/api';
 import { requireCidco } from '@/lib/guards';
 import { addDays, clientIp, logComm } from '@/lib/handshake';
 import { sftpEndpoint, sha256 } from '@/lib/sftp';
+import { SHARED_ARCHITECT_EMAIL, sharedArchitectAccount } from '@/lib/portalAccount';
 
 export const dynamic = 'force-dynamic';
 
@@ -35,7 +36,6 @@ export async function GET(req: NextRequest) {
       where: { channel: 'SFTP' },
       orderBy: { createdAt: 'desc' },
       include: {
-        architect: { select: { id: true, name: true, email: true, firmName: true } },
         company: true,
         _count: { select: { sftpUploads: true } },
         sftpUploads: {
@@ -56,7 +56,6 @@ export async function GET(req: NextRequest) {
         status: h.credentialExpiresAt.getTime() < now && h.status !== 'REVOKED' ? 'EXPIRED' : h.status,
         credentialExpiresAt: h.credentialExpiresAt,
         establishedAt: h.establishedAt,
-        architect: h.architect,
         // The registration every transfer on this account is checked against.
         company: h.company
           ? {
@@ -65,6 +64,7 @@ export async function GET(req: NextRequest) {
               companyName: h.company.companyName,
               architectServerIp: h.company.architectServerIp,
               filePath: h.company.filePath,
+              contactEmail: h.company.contactEmail,
               active: h.company.active,
             }
           : null,
@@ -92,17 +92,18 @@ export async function POST(req: NextRequest) {
 
     const data = issueSchema.parse(await req.json());
 
-    const company = await prisma.company.findUnique({
-      where: { companyId: data.companyId },
-      include: { architect: true },
-    });
+    const company = await prisma.company.findUnique({ where: { companyId: data.companyId } });
     if (!company) {
       return fail(`No company registered with id "${data.companyId}". Register the company first.`, 404);
     }
     if (!company.active) return fail('That company registration is inactive', 409);
-    if (!company.architect) {
-      return fail('Link an architect account to the company before issuing credentials', 422);
-    }
+
+    // Handshakes hang off the shared portal login — architects have no account
+    // of their own; this user id and password are their company's identity.
+    const owner = company.architectId
+      ? await prisma.user.findUnique({ where: { id: company.architectId } })
+      : await sharedArchitectAccount();
+    if (!owner) return fail('Could not resolve the portal account for this company', 500);
 
     const credentialExpiresAt = addDays(new Date(), data.expiresInDays ?? 365);
 
@@ -111,7 +112,7 @@ export async function POST(req: NextRequest) {
 
     const handshake = await prisma.architectHandshake.create({
       data: {
-        architectId: company.architect.id,
+        architectId: owner.id,
         channel: 'SFTP',
         companyRecordId: company.id,
         clientId: username,
@@ -134,7 +135,8 @@ export async function POST(req: NextRequest) {
       event: 'SFTP_CREDENTIALS_ISSUED',
       statusCode: 201,
       detail:
-        `SFTP user id issued to ${company.architect.email} for ${company.companyName} (${company.companyId}); ` +
+        `SFTP user id issued for ${company.companyName} (${company.companyId})` +
+        `${company.contactEmail ? `, contact ${company.contactEmail}` : ''}; ` +
         `data accepted from ${company.architectServerIp} at "${company.filePath}"; ` +
         `valid until ${credentialExpiresAt.toISOString()}`,
       ip: clientIp(req),
@@ -149,11 +151,12 @@ export async function POST(req: NextRequest) {
         account: {
           id: handshake.id,
           status: handshake.status,
-          architect: { id: company.architect.id, name: company.architect.name, email: company.architect.email },
+          contactEmail: company.contactEmail,
           createdAt: handshake.createdAt,
         },
-        // Exactly what the officer sends: the login, the address to send to,
-        // and the path the file is taken from.
+        // Exactly what the officer sends: the portal login every architect
+        // uses, their company's SFTP user id, and where to send.
+        portalLogin: { email: SHARED_ARCHITECT_EMAIL, signInAt: '/' },
         credential: {
           companyName: company.companyName,
           companyId: company.companyId,

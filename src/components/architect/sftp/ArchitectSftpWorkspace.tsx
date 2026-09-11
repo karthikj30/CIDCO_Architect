@@ -8,10 +8,13 @@ import { readJson } from '@/lib/fetchJson';
 /**
  * The architect's SFTP workspace.
  *
- * Their registration as CIDCO holds it, a WinSCP-style pair of panes for
- * sending by hand, and CIDCO's validation result for every transfer so far.
+ * Every architect signs in with the one portal login CIDCO issues, so the
+ * session cannot say which company someone is. They connect the way they would
+ * in WinSCP — designated address, SFTP user id, password — and that identifies
+ * their company. From there: the registration every transfer is checked
+ * against, a pair of file panes, and CIDCO's result for each transfer.
  */
-type Upload = {
+export type Upload = {
   id: string;
   fileName: string;
   sizeBytes: number;
@@ -33,19 +36,22 @@ type Upload = {
   rejectionReason: string | null;
 };
 
+type Company = {
+  companyId: string;
+  companyName: string;
+  architectServerIp: string;
+  filePath: string;
+  contactEmail: string | null;
+  active: boolean;
+};
+
 type Account = {
   id: string;
   username: string;
   status: string;
   credentialExpiresAt: string;
   establishedAt: string | null;
-  company: {
-    companyId: string;
-    companyName: string;
-    architectServerIp: string;
-    filePath: string;
-    active: boolean;
-  } | null;
+  company: Company;
   uploads: Upload[];
   commLogs: Array<{
     id: string; direction: string; event: string; statusCode: number | null;
@@ -53,70 +59,106 @@ type Account = {
   }>;
 };
 
-type MeData = {
-  architect: { id: string; name: string; email: string; firmName: string | null };
-  endpoint: { designatedIp: string; host: string; port: number; fileTypes: string; protocol: string };
-  accounts: Account[];
-};
+type Endpoint = { designatedIp: string; host: string; port: number; fileTypes: string; protocol: string };
 
 const fmt = (d: string | null) => (d ? new Date(d).toLocaleString('en-IN') : '—');
+const INPUT =
+  'w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500';
 
 export default function ArchitectSftpWorkspace() {
-  const [me, setMe] = useState<MeData | null>(null);
   const [architect, setArchitect] = useState<Architect | null>(null);
+  const [endpoint, setEndpoint] = useState<Endpoint | null>(null);
   const [checking, setChecking] = useState(true);
+
+  // Connection state — the SFTP credentials are the company's identity.
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [account, setAccount] = useState<Account | null>(null);
+  const [connecting, setConnecting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const reload = useCallback(async () => {
+  /** Confirms the portal session and picks up the designated address. */
+  const loadSession = useCallback(async () => {
     const res = await fetch('/api/architect/sftp/me');
-    if (res.ok) {
-      const json = await readJson(res);
-      setMe(json.data);
-      setArchitect((prev) => prev ?? { ...json.data.architect, role: 'ARCHITECT' });
-    }
+    if (!res.ok) return false;
+    const json = await readJson(res);
+    setArchitect((prev) => prev ?? { ...json.data.architect, role: 'ARCHITECT' });
+    setEndpoint(json.data.endpoint);
+    return true;
   }, []);
 
   useEffect(() => {
     (async () => {
-      await reload();
+      await loadSession();
       setChecking(false);
     })();
-  }, [reload]);
+  }, [loadSession]);
 
-  // The automated feed delivers outside the browser, so keep this current.
+  /** Connect, or refresh the connected account after a transfer. */
+  const connect = useCallback(
+    async (silent = false) => {
+      if (!username || !password) return;
+      if (!silent) {
+        setConnecting(true);
+        setError(null);
+      }
+      try {
+        const res = await fetch('/api/architect/sftp/connect', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+        const json = await readJson(res);
+        if (!res.ok) {
+          if (!silent) setError(json.error ?? 'Could not connect');
+          return;
+        }
+        setAccount(json.data.account);
+        setEndpoint(json.data.endpoint);
+      } catch (err) {
+        if (!silent) setError((err as Error).message);
+      } finally {
+        if (!silent) setConnecting(false);
+      }
+    },
+    [username, password],
+  );
+
+  // Once connected, keep the transfer list current — the automated feed
+  // delivers outside the browser.
   useEffect(() => {
-    if (!me) return;
-    timer.current = setInterval(() => void reload(), 8000);
+    if (!account) return;
+    timer.current = setInterval(() => void connect(true), 8000);
     return () => {
       if (timer.current) clearInterval(timer.current);
     };
-  }, [me, reload]);
+  }, [account, connect]);
 
   async function signOut() {
     await fetch('/api/auth/logout', { method: 'POST' });
-    setMe(null);
     setArchitect(null);
+    setAccount(null);
   }
 
   if (checking) {
     return <div className="flex flex-1 items-center justify-center text-sm text-slate-500">Loading…</div>;
   }
 
-  if (!me || !architect) {
+  if (!architect) {
     return (
       <main className="flex-1 overflow-y-auto p-8">
         <ArchitectSignIn
           onSignedIn={async (a) => {
             setArchitect(a);
-            await reload();
+            await loadSession();
           }}
         />
       </main>
     );
   }
 
-  const account = me.accounts[0] ?? null;
-  const ep = me.endpoint;
+  const ep = endpoint;
 
   return (
     <main className="flex-1 overflow-y-auto bg-slate-50 p-8">
@@ -129,26 +171,93 @@ export default function ArchitectSftpWorkspace() {
             </p>
           </div>
           <div className="text-right">
-            <p className="text-sm font-medium text-slate-900">{architect.name}</p>
+            <p className="text-sm font-medium text-slate-900">{architect.email}</p>
             <button onClick={signOut} className="text-xs font-semibold text-slate-500 hover:text-slate-900">
               Sign out
             </button>
           </div>
         </div>
 
-        {!account ? (
-          <div className="rounded-xl border border-slate-200 bg-white p-8 text-center shadow-sm">
-            <p className="text-sm font-medium text-slate-900">No SFTP credentials yet</p>
-            <p className="mx-auto mt-2 max-w-lg text-sm text-slate-500">
-              CIDCO registers your company first — the company id, your server address and the path your
-              CSV is exported to — and then emails you a user id, a password and the address to send to.
-              Once that arrives, this page is where you send.
+        {/* Connect — exactly what an SFTP client asks for */}
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void connect();
+          }}
+          className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
+        >
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="text-sm font-semibold text-slate-900">
+              {account ? 'Connected' : 'Connect to CIDCO'}
+            </h2>
+            <p className="text-xs text-slate-500">
+              Use the SFTP user id and password CIDCO emailed you — they identify your company.
             </p>
           </div>
-        ) : !account.company ? (
-          <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">
-            These credentials are not linked to a company registration, so CIDCO will refuse every
-            transfer. Ask CIDCO to link them before sending.
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div>
+              <label htmlFor="cx-host" className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                Designated IP
+              </label>
+              <input
+                id="cx-host"
+                readOnly
+                value={ep ? `${ep.designatedIp}:${ep.port}` : '…'}
+                className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-sm text-slate-700"
+              />
+            </div>
+            <div>
+              <label htmlFor="cx-user" className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                User id
+              </label>
+              <input
+                id="cx-user"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="sftp_…"
+                autoComplete="off"
+                className={`${INPUT} font-mono`}
+              />
+            </div>
+            <div>
+              <label htmlFor="cx-pass" className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                Password
+              </label>
+              <input
+                id="cx-pass"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="from CIDCO’s email"
+                autoComplete="off"
+                className={INPUT}
+              />
+            </div>
+            <div className="flex items-end">
+              <button
+                type="submit"
+                disabled={connecting || !username || !password}
+                className="w-full rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-700 disabled:opacity-40"
+              >
+                {connecting ? 'Connecting…' : account ? 'Reconnect' : 'Connect'}
+              </button>
+            </div>
+          </div>
+
+          {error && (
+            <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>
+          )}
+        </form>
+
+        {!account ? (
+          <div className="rounded-xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+            <p className="text-sm font-medium text-slate-900">Not connected yet</p>
+            <p className="mx-auto mt-2 max-w-lg text-sm text-slate-500">
+              CIDCO registers your company first — the company id, your server address and the path your
+              CSV is exported to — then emails you an SFTP user id and password. Enter them above to
+              connect.
+            </p>
           </div>
         ) : (
           <>
@@ -179,20 +288,20 @@ export default function ArchitectSftpWorkspace() {
                 <div>
                   <dt className="font-semibold uppercase tracking-wide text-violet-700">Send to</dt>
                   <dd className="mt-0.5 font-mono text-sm text-violet-950">
-                    {ep.designatedIp}:{ep.port}
+                    {ep?.designatedIp}:{ep?.port}
                   </dd>
                 </div>
               </dl>
             </div>
 
-            {/* WinSCP-style transfer */}
             <FileTransferPanes
               username={account.username}
-              designatedIp={ep.designatedIp}
-              port={ep.port}
+              password={password}
+              designatedIp={ep?.designatedIp ?? ''}
+              port={ep?.port ?? 0}
               registeredPath={account.company.filePath}
               delivered={account.uploads}
-              onTransferred={reload}
+              onTransferred={() => connect(true)}
             />
 
             {/* The automated route */}
@@ -206,7 +315,7 @@ export default function ArchitectSftpWorkspace() {
                     <code className="font-mono">{account.company.filePath}</code> on a schedule:
                   </p>
                   <pre className="mt-2 overflow-x-auto rounded-lg bg-slate-900 p-3 font-mono text-[11px] leading-relaxed text-slate-100">
-{`sftp -P ${ep.port} ${account.username}@${ep.designatedIp}
+{`sftp -P ${ep?.port} ${account.username}@${ep?.designatedIp}
 sftp> put ${account.company.filePath}/readings.csv ${account.company.filePath}/`}
                   </pre>
                   <p className="mt-2 text-xs text-slate-500">

@@ -19,7 +19,7 @@ every later transfer is checked against.
 | # | Who | Action | Where |
 |---|-----|--------|-------|
 | **i** | CIDCO | **Registers the company**: company name, company id, the architect's server IP, and the file path their CSV is taken from | `/cidco/sftp` → Companies |
-| **1** | CIDCO | **Emails the architect** a user id, a password and the **designated IP** to send to | `/cidco/sftp` → Companies → Issue credentials |
+| **1** | CIDCO | **Emails the architect** the shared portal login, plus their company's SFTP user id, password and the **designated IP** to send to | `/cidco/sftp` → Companies → Issue credentials |
 | **2** | Architect | **Sends automatically** — takes the CSV from the registered path and puts it on the designated address | their own server |
 | **✓** | CIDCO | **Validates every single transfer** against the registration, then stores the readings | `/cidco/sftp` → Delivered transfers |
 
@@ -41,12 +41,23 @@ A CIDCO officer enters four things by hand:
 | **Architect's server IP** | e.g. `203.0.113.9`. Data is only accepted from here. |
 | **File path** | e.g. `/var/aqi/exports`. Where the CSV is picked up from, and written to here. |
 
-The architect's email goes in the same form. **Any email is accepted** — CIDCO is creating the
-architect's account here, so if no account exists for it one is made, and the portal password is
-shown **once** for the officer to send on. That login is what the architect uses to sign in at the
-portal front page. If they lose it, **Reset portal password** on the company mints a new one.
+The architect's email goes in the same form and is **stored as contact detail only** — any email is
+accepted and no account is created for it.
 
-Credentials cannot be issued until an architect is linked.
+## Signing in
+
+Architects do not get an account each. **One shared CIDCO portal login is handed to every
+architect:**
+
+```
+cidco@gmail.com  /  123456
+```
+
+(Override with `ARCHITECT_PORTAL_EMAIL` / `ARCHITECT_PORTAL_PASSWORD`.)
+
+That login only opens the door. Inside `/architect/sftp` the architect **connects** the way they
+would in WinSCP — designated address, SFTP user id, password — and *that* pair identifies their
+company. Readings are attributed to the company, not to a person.
 
 A registration can be corrected later (`PATCH /api/admin/sftp/companies/:id`) — the change applies
 to the very next transfer, because validation reads this record every time. Deactivating a company

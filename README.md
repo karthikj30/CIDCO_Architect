@@ -147,14 +147,14 @@ CIDCO validates every single transfer, previews the file and imports the rows. P
 
 - **i. CIDCO registers the company by hand** in *Companies*: company name, **company id**, the
   **architect's server IP** (the only address data is accepted from) and the **file path** their CSV
-  is taken from, plus the architect's email. **Any email is accepted** — CIDCO is creating the
-  architect's account, so one is made for it and the portal password shown once to pass on. *Reset
-  portal password* re-issues it if they lose it.
+  is taken from, plus the architect's email — **stored as contact detail only**, no account is
+  created for it.
 
 *Then:*
 
-1. **CIDCO issues credentials against that registration** and emails the architect a **user id**, a
-   **password** and the **designated IP** — CIDCO's own address, the one they send to.
+1. **CIDCO issues credentials against that registration** and emails the architect their company's
+   **SFTP user id**, **password** and the **designated IP** — CIDCO's own address, the one they send
+   to — along with the shared portal login.
 2. **The architect sends automatically.** Their server takes the CSV from the registered path and
    puts it on the designated address, on a schedule. `scripts/architect-sender.ts` does exactly this;
    any SFTP client or cron job works the same way.
@@ -307,8 +307,9 @@ After signing in you choose **API** or **SFTP**, and that dashboard opens.
 | `/docs/architect`  | — | API channel guide (validation, tokens, sending data) |
 | `/docs/sftp`       | — | SFTP channel guide (handshake, the workbook, uploading) |
 
-Seeded logins: CIDCO officer `officer@cidco.example` / `Password123`; architect
-`architect@example.com` / `Password123`. Every dashboard links to its sibling channel and back to the
+Seeded logins: CIDCO officer `officer@cidco.example` / `Password123`; **the shared architect portal
+login `cidco@gmail.com` / `123456`** (every architect uses this, then connects with their company's
+SFTP user id and password); demo architect `architect@example.com` / `Password123`. Every dashboard links to its sibling channel and back to the
 chooser from the header.
 
 ### Architect portal (`/architect`)

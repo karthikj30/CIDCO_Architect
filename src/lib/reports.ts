@@ -37,10 +37,12 @@ export async function createReport(params: {
   userId: string;
   source: ReportSource;
   input: ReportInput;
+  /** The registered company that delivered this reading (SFTP channel). */
+  companyRecordId?: string | null;
   attachments?: PendingAttachment[];
   preStored?: Array<StoredFile & { kind: AttachmentKind }>;
 }) {
-  const { userId, source, input, attachments = [], preStored = [] } = params;
+  const { userId, source, input, companyRecordId = null, attachments = [], preStored = [] } = params;
 
   const stored: Array<StoredFile & { kind: AttachmentKind }> = [...preStored];
   for (const item of attachments) {
@@ -71,6 +73,7 @@ export async function createReport(params: {
         referenceNo: await nextReferenceNo(),
         userId,
         projectId,
+        companyRecordId,
         source,
         siteName: input.siteName,
         location: input.location,
