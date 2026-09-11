@@ -1,4 +1,3 @@
-import { randomBytes } from 'crypto';
 import type { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
@@ -6,7 +5,7 @@ import { fail, handleError, ok } from '@/lib/api';
 import { requireCidco } from '@/lib/guards';
 import { addDays, clientIp, logComm } from '@/lib/handshake';
 import { sftpEndpoint, sha256 } from '@/lib/sftp';
-import { SHARED_ARCHITECT_EMAIL, sharedArchitectAccount } from '@/lib/portalAccount';
+import { SHARED_ARCHITECT_EMAIL, SHARED_ARCHITECT_PASSWORD, sharedArchitectAccount } from '@/lib/portalAccount';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,13 +15,9 @@ const issueSchema = z.object({
   expiresInDays: z.coerce.number().int().positive().max(3650).optional(),
 });
 
-/** SFTP user ids read better than the API's opaque client ids. */
-function generateSftpUsername() {
-  return `sftp_${randomBytes(5).toString('hex')}`;
-}
-
-function generateSftpPassword() {
-  const secret = randomBytes(18).toString('base64url');
+/** Same password as the shared portal login (cidco@gmail.com). */
+function sftpPasswordBundle() {
+  const secret = SHARED_ARCHITECT_PASSWORD;
   return { secret, secretHash: sha256(secret), secretPrefix: secret.slice(0, 8) };
 }
 
@@ -82,8 +77,9 @@ export async function GET(req: NextRequest) {
  * POST /api/admin/sftp/accounts
  *
  * Step two: issue an SFTP user id and password against a company CIDCO has
- * already registered. The password is returned exactly once — this is the
- * bundle the officer emails over, including the designated IP to send to.
+ * already registered. The password matches the shared portal login; the user
+ * id is unique per company and is what the officer emails over, with the
+ * designated IP to send to.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -98,6 +94,16 @@ export async function POST(req: NextRequest) {
     }
     if (!company.active) return fail('That company registration is inactive', 409);
 
+    // SFTP user id = the company id CIDCO registered (e.g. test03).
+    const username = company.companyId;
+    const taken = await prisma.architectHandshake.findUnique({ where: { clientId: username } });
+    if (taken) {
+      return fail(
+        `SFTP credentials already exist for company id "${username}". Revoke the old account first if you need to re-issue.`,
+        409,
+      );
+    }
+
     // Handshakes hang off the shared portal login — architects have no account
     // of their own; this user id and password are their company's identity.
     const owner = company.architectId
@@ -107,8 +113,7 @@ export async function POST(req: NextRequest) {
 
     const credentialExpiresAt = addDays(new Date(), data.expiresInDays ?? 365);
 
-    const username = generateSftpUsername();
-    const { secret, secretHash, secretPrefix } = generateSftpPassword();
+    const { secret, secretHash, secretPrefix } = sftpPasswordBundle();
 
     const handshake = await prisma.architectHandshake.create({
       data: {
@@ -147,7 +152,7 @@ export async function POST(req: NextRequest) {
     return ok(
       {
         message:
-          'SFTP credentials issued. Email this to the architect — the password is shown only once.',
+          'SFTP credentials issued. The user id is this company\'s registered id; the password matches the shared portal login.',
         account: {
           id: handshake.id,
           status: handshake.status,
@@ -156,7 +161,7 @@ export async function POST(req: NextRequest) {
         },
         // Exactly what the officer sends: the portal login every architect
         // uses, their company's SFTP user id, and where to send.
-        portalLogin: { email: SHARED_ARCHITECT_EMAIL, signInAt: '/' },
+        portalLogin: { email: SHARED_ARCHITECT_EMAIL, password: SHARED_ARCHITECT_PASSWORD, signInAt: '/' },
         credential: {
           companyName: company.companyName,
           companyId: company.companyId,

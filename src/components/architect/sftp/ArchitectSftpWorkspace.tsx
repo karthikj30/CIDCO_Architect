@@ -191,7 +191,9 @@ export default function ArchitectSftpWorkspace() {
               {account ? 'Connected' : 'Connect to CIDCO'}
             </h2>
             <p className="text-xs text-slate-500">
-              Use the SFTP user id and password CIDCO emailed you — they identify your company.
+              Use the company id CIDCO registered (e.g. <span className="font-mono">test03</span>) as
+              your user id, and password <span className="font-mono">123456</span> (same as the portal
+              login).
             </p>
           </div>
 
@@ -215,7 +217,7 @@ export default function ArchitectSftpWorkspace() {
                 id="cx-user"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                placeholder="sftp_…"
+                placeholder="test03"
                 autoComplete="off"
                 className={`${INPUT} font-mono`}
               />
@@ -255,7 +257,8 @@ export default function ArchitectSftpWorkspace() {
             <p className="text-sm font-medium text-slate-900">Not connected yet</p>
             <p className="mx-auto mt-2 max-w-lg text-sm text-slate-500">
               CIDCO registers your company first — the company id, your server address and the path your
-              CSV is exported to — then emails you an SFTP user id and password. Enter them above to
+              CSV is exported to — then issues SFTP access using that company id as the user id.
+              Enter the company id above with password <span className="font-mono">123456</span> to
               connect.
             </p>
           </div>

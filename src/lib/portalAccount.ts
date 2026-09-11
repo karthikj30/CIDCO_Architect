@@ -14,7 +14,8 @@ import { hashPassword } from './auth';
  * carries that attribution.
  */
 export const SHARED_ARCHITECT_EMAIL = process.env.ARCHITECT_PORTAL_EMAIL || 'cidco@gmail.com';
-const SHARED_ARCHITECT_PASSWORD = process.env.ARCHITECT_PORTAL_PASSWORD || '123456';
+/** Shared portal + SFTP password — same value for every architect company. */
+export const SHARED_ARCHITECT_PASSWORD = process.env.ARCHITECT_PORTAL_PASSWORD || '123456';
 
 let cachedId: string | null = null;
 

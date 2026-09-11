@@ -41,7 +41,11 @@ export default function SftpCompaniesPanel() {
   const [credential, setCredential] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [issuingFor, setIssuingFor] = useState<string | null>(null);
-  const [portalLogin, setPortalLogin] = useState<{ email: string; signInAt: string } | null>(null);
+  const [portalLogin, setPortalLogin] = useState<{
+    email: string;
+    password?: string;
+    signInAt: string;
+  } | null>(null);
 
   const [form, setForm] = useState({
     companyName: '',
@@ -162,9 +166,15 @@ export default function SftpCompaniesPanel() {
         <div className="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
           <p className="font-semibold">The architect signs in with the shared CIDCO portal login</p>
           <p className="mt-1">
-            <span className="font-mono">{portalLogin.email}</span> at{' '}
-            <span className="font-mono">{portalLogin.signInAt}</span>. They then connect with the SFTP
-            user id and password below, which is what identifies their company.
+            <span className="font-mono">{portalLogin.email}</span>
+            {portalLogin.password ? (
+              <>
+                {' '}
+                / <span className="font-mono">{portalLogin.password}</span>
+              </>
+            ) : null}{' '}
+            at <span className="font-mono">{portalLogin.signInAt}</span>. They then connect with the
+            company id as the SFTP user id; the password is the same as this portal login.
           </p>
         </div>
       )}
@@ -172,8 +182,10 @@ export default function SftpCompaniesPanel() {
       {credential && (
         <div className="space-y-2 rounded-xl border border-emerald-200 bg-emerald-50 p-5">
           <p className="text-sm font-medium text-emerald-900">
-            Email this to the architect — the password is shown only once. It carries the user id, the
-            password and the designated IP address to send to.
+            Email this to the architect. The user id is the company id you registered. The password
+            matches the shared portal login (
+            <span className="font-mono">cidco@gmail.com</span> / <span className="font-mono">123456</span>
+            ).
           </p>
           <CopyField label="SFTP credentials" value={credential} />
         </div>
