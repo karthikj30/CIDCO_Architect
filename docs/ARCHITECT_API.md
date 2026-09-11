@@ -9,6 +9,10 @@ issuing credentials, approving validation requests, approving token requests, an
 communication log. Architects have their own dashboard at **`/architect`**, where CIDCO's messages —
 including the tokens and the endpoint URLs — are delivered.
 
+> This is the **API channel**. If CIDCO gave you an *SFTP* user id and password instead, you are on
+> the other channel — see [`SFTP_CHANNEL.md`](./SFTP_CHANNEL.md). The two are separate: API
+> credentials do not open the SFTP server, and SFTP credentials do not open the API.
+
 All responses share one envelope:
 
 ```jsonc

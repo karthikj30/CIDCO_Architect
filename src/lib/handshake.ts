@@ -86,7 +86,13 @@ export type CommEvent =
   | 'VALIDATION_APPROVED'
   | 'VALIDATION_REJECTED'
   | 'TOKENS_DELIVERED'
-  | 'ACCOUNT_CREATED';
+  | 'ACCOUNT_CREATED'
+  // SFTP channel. The server writes SFTP_HANDSHAKE_REQUESTED, SFTP_CONNECTED,
+  // SFTP_AUTH_FAILED, SFTP_IP_REFUSED, SFTP_FILE_RECEIVED and
+  // SFTP_FILE_REJECTED directly; these are the ones the web app raises.
+  | 'SFTP_CREDENTIALS_ISSUED'
+  | 'SFTP_HANDSHAKE_APPROVED'
+  | 'SFTP_HANDSHAKE_REJECTED';
 
 export async function logComm(params: {
   handshakeId: string | null;
@@ -149,6 +155,14 @@ export type CredentialCheck =
 export async function verifyCredentials(clientId: string, secret: string): Promise<CredentialCheck> {
   const handshake = await prisma.architectHandshake.findUnique({ where: { clientId } });
   if (!handshake) return { ok: false, reason: 'Unknown clientId', handshakeId: null };
+  // SFTP credentials are for the SFTP server only — they never open the API.
+  if (handshake.channel !== 'API') {
+    return {
+      ok: false,
+      reason: 'These are SFTP credentials. Use them with the CIDCO SFTP server, not the API.',
+      handshakeId: handshake.id,
+    };
+  }
   if (handshake.status === 'REVOKED' || handshake.revokedAt) {
     return { ok: false, reason: 'Handshake has been revoked', handshakeId: handshake.id };
   }

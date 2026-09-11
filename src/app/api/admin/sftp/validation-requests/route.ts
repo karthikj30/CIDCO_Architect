@@ -7,20 +7,19 @@ import { requireCidco } from '@/lib/guards';
 export const dynamic = 'force-dynamic';
 
 /**
- * GET /api/admin/validation-requests
+ * GET /api/admin/sftp/validation-requests
  *
- * The approval queue: architects who have hit the API with their credentials
- * and are waiting for CIDCO to verify their identity, IP and device.
+ * The SFTP approval queue: architects whose first SFTP connection verified but
+ * who are waiting for CIDCO to confirm where the connection came from. The
+ * SFTP server refuses every session until one of these is approved.
  */
 export async function GET(req: NextRequest) {
   try {
     const guard = await requireCidco(req);
     if ('error' in guard) return guard.error;
 
-    const url = new URL(req.url);
-    const status = url.searchParams.get('status');
-    // This queue is the API channel's; SFTP has its own at /api/admin/sftp.
-    const where: Prisma.ValidationRequestWhereInput = { channel: 'API' };
+    const status = new URL(req.url).searchParams.get('status');
+    const where: Prisma.ValidationRequestWhereInput = { channel: 'SFTP' };
     if (status) where.status = status as Prisma.ValidationRequestWhereInput['status'];
 
     const requests = await prisma.validationRequest.findMany({
@@ -34,8 +33,7 @@ export async function GET(req: NextRequest) {
             status: true,
             whitelistedIp: true,
             deviceInfo: true,
-            accessTokenTtlDays: true,
-            refreshTokenTtlDays: true,
+            credentialExpiresAt: true,
             architect: { select: { id: true, name: true, email: true, firmName: true, councilRegNo: true } },
           },
         },

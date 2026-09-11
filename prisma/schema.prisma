@@ -17,6 +17,14 @@ enum ReportSource {
   API
   CSV
   WEB
+  SFTP
+}
+
+/// How an architect delivers AQI data. Each handshake belongs to exactly one
+/// channel, so the two flows never share credentials or dashboards.
+enum TransferChannel {
+  API // architect calls the CIDCO REST API with a bearer token
+  SFTP // architect uploads an Excel workbook over SFTP
 }
 
 enum ReportStatus {
@@ -233,6 +241,9 @@ model ApiRequestLog {
 model ArchitectHandshake {
   id                  String          @id @default(cuid())
   architectId         String
+  // Which delivery channel this handshake is for. An architect can hold one of
+  // each; the credentials, dashboards and flows are kept entirely separate.
+  channel             TransferChannel @default(API)
   // The "userid" half of the credential the admin hands over. Public-ish.
   clientId            String          @unique
   // Only the hash of the "password" half is stored; plaintext shown once.
@@ -268,6 +279,7 @@ model ArchitectHandshake {
   commLogs           CommunicationLog[]
   validationRequests ValidationRequest[]
   deliveries         TokenDelivery[]
+  sftpUploads        SftpUpload[]
 
   @@index([architectId])
   @@index([status])
@@ -302,8 +314,10 @@ model IntegrationToken {
 /// reviews the architect, IP and device on its dashboard and approves or
 /// rejects — only an approval establishes the channel and issues tokens.
 model ValidationRequest {
-  id           String         @id @default(cuid())
+  id           String          @id @default(cuid())
   handshakeId  String
+  // Mirrors the handshake's channel so each dashboard shows only its own queue.
+  channel      TransferChannel @default(API)
   presentedIp  String?
   deviceInfo   String?
   status       ApprovalStatus @default(PENDING)
@@ -343,6 +357,43 @@ model TokenDelivery {
 
   @@index([handshakeId])
   @@map("token_deliveries")
+}
+
+/// What happened to an Excel workbook after it landed on the SFTP server.
+enum SftpUploadStatus {
+  RECEIVED // the file is on disk, not parsed yet
+  PARSED // every row became a reading
+  PARTIAL // some rows imported, some rejected
+  FAILED // nothing could be imported
+}
+
+/// One Excel workbook an architect uploaded over SFTP. Holds the parse result
+/// and a preview of the sheet so a CIDCO officer can look at exactly what was
+/// delivered before, and after, it became readings.
+model SftpUpload {
+  id            String           @id @default(cuid())
+  handshakeId   String
+  fileName      String
+  storedName    String // file name on CIDCO's disk
+  sizeBytes     Int
+  status        SftpUploadStatus @default(RECEIVED)
+  // Parse outcome.
+  sheetName     String?
+  columns       Json? // header row, as read from the sheet
+  rows          Json? // the sheet's rows, for the dashboard preview
+  rowCount      Int              @default(0)
+  importedCount Int              @default(0)
+  failedCount   Int              @default(0)
+  errors        Json? // per-row rejection reasons
+  sourceIp      String?
+  receivedAt    DateTime         @default(now())
+  parsedAt      DateTime?
+
+  handshake ArchitectHandshake @relation(fields: [handshakeId], references: [id], onDelete: Cascade)
+
+  @@index([handshakeId])
+  @@index([status])
+  @@map("sftp_uploads")
 }
 
 /// An architect's request for a fresh token (typically after expiry). The

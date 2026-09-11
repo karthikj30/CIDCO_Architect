@@ -60,6 +60,22 @@
     {
       "key": "validationRequestId",
       "value": ""
+    },
+    {
+      "key": "sftpUsername",
+      "value": ""
+    },
+    {
+      "key": "sftpPassword",
+      "value": ""
+    },
+    {
+      "key": "sftpRequestId",
+      "value": ""
+    },
+    {
+      "key": "sftpUploadId",
+      "value": ""
     }
   ],
   "item": [
@@ -827,6 +843,238 @@
                 "logs"
               ]
             }
+          }
+        }
+      ]
+    },
+    {
+      "name": "SFTP channel (CIDCO officer)",
+      "description": "The SFTP channel is driven from an SFTP client, not from Postman \u2014 the upload itself is a file transfer. These are the officer-side endpoints behind the CIDCO SFTP dashboard. See docs/SFTP_CHANNEL.md.",
+      "item": [
+        {
+          "name": "Issue SFTP credentials",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('issued', () => pm.response.to.have.status(201));",
+                  "const c = pm.response.json().data.credential;",
+                  "pm.collectionVariables.set('sftpUsername', c.username);",
+                  "pm.collectionVariables.set('sftpPassword', c.password);",
+                  "console.log(`sftp -P ${c.port} ${c.username}@${c.host}`);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"architectEmail\": \"{{architectEmail}}\",\n  \"expiresInDays\": 30\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/sftp/accounts",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "sftp",
+                "accounts"
+              ]
+            },
+            "description": "Issues an SFTP user id and password for an architect. The password is returned once \u2014 email it over, with the host and port."
+          }
+        },
+        {
+          "name": "List SFTP accounts",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/sftp/accounts",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "sftp",
+                "accounts"
+              ]
+            },
+            "description": "Every SFTP account, its handshake status, whitelisted address and upload count."
+          }
+        },
+        {
+          "name": "Handshake queue",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('listed', () => pm.response.to.have.status(200));",
+                  "const rows = pm.response.json().data.requests;",
+                  "const mine = rows.find(r => r.handshake.clientId === pm.collectionVariables.get('sftpUsername'));",
+                  "if (mine) pm.collectionVariables.set('sftpRequestId', mine.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/sftp/validation-requests?status=PENDING",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "sftp",
+                "validation-requests?status=PENDING"
+              ]
+            },
+            "description": "Architects whose first SFTP connection verified and who are waiting to be approved. The server refuses their sessions until one of these is approved."
+          }
+        },
+        {
+          "name": "Approve the handshake",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('approved', () => pm.response.to.have.status(200));",
+                  "console.log(pm.response.json().data.message);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/sftp/validation-requests/{{sftpRequestId}}/approve",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "sftp",
+                "validation-requests",
+                "{{sftpRequestId}}",
+                "approve"
+              ]
+            },
+            "description": "Whitelists the address the architect connected from and opens the channel. No tokens are involved \u2014 this channel authenticates with the user id and password on every connection."
+          }
+        },
+        {
+          "name": "Reject the handshake",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reviewNote\": \"Connection did not come from the registered site\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/sftp/validation-requests/{{sftpRequestId}}/reject",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "sftp",
+                "validation-requests",
+                "{{sftpRequestId}}",
+                "reject"
+              ]
+            },
+            "description": "Refuses the request; the SFTP server keeps blocking that account."
+          }
+        },
+        {
+          "name": "Delivered workbooks",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('listed', () => pm.response.to.have.status(200));",
+                  "const u = pm.response.json().data.uploads[0];",
+                  "if (u) pm.collectionVariables.set('sftpUploadId', u.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/sftp/uploads",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "sftp",
+                "uploads"
+              ]
+            },
+            "description": "Every Excel workbook architects have uploaded, with how many rows became readings."
+          }
+        },
+        {
+          "name": "Preview one workbook",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/sftp/uploads/{{sftpUploadId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "sftp",
+                "uploads",
+                "{{sftpUploadId}}"
+              ]
+            },
+            "description": "The full sheet as it arrived \u2014 every column and row \u2014 plus the reason each rejected row was rejected."
           }
         }
       ]

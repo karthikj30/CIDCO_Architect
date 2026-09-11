@@ -21,7 +21,8 @@ export async function GET(req: NextRequest) {
     const now = Date.now();
 
     const handshakes = await prisma.architectHandshake.findMany({
-      where: { architectId: me.id },
+      // The API workspace shows API integrations; SFTP has its own workspace.
+      where: { architectId: me.id, channel: 'API' },
       orderBy: { createdAt: 'desc' },
       include: {
         tokens: { orderBy: { createdAt: 'desc' }, take: 5 },

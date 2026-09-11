@@ -14,16 +14,34 @@ Reports reach CIDCO through **two channels**:
 
 Both channels land in the same table and are reviewed by CIDCO officers in the same workflow.
 
-The web UI is **two portals** — the CIDCO admin portal at `/` and the architect portal at
-`/architect` — described under [Pages](#pages).
+On top of those, an architect delivers their ongoing readings through one of **two integration
+channels**, each with its own credentials, its own dashboards and its own approval queue:
+
+| Channel | Transport | Credentials | Docs |
+|---------|-----------|-------------|------|
+| **API** | REST over HTTPS, automated every few hours | client id + secret → access & refresh tokens | [`docs/ARCHITECT_API.md`](docs/ARCHITECT_API.md) |
+| **SFTP** | An Excel workbook uploaded over SFTP | SFTP user id + password | [`docs/SFTP_CHANNEL.md`](docs/SFTP_CHANNEL.md) |
+
+The two never mix: an SFTP user id will not open the API, and an API client id will not open the
+SFTP server.
+
+### Getting in
+
+Everyone starts at **`/`** — one page to sign in or sign up, as a CIDCO officer or an architect.
+Once signed in you pick your channel, and that dashboard opens:
+
+| | API channel | SFTP channel |
+|---|---|---|
+| CIDCO officer | `/cidco` | `/cidco/sftp` |
+| Architect | `/architect` | `/architect/sftp` |
 
 ---
 
-## Architect ⇄ CIDCO handshake & token integration
+## Channel 1 — Architect ⇄ CIDCO handshake & token integration
 
 A CIDCO-approved, token-based channel between an architect and CIDCO. Both sides have their own
-portal: CIDCO at `/`, the architect at `/architect`. Every protocol call is also a plain HTTP API,
-so an architect's station (or Postman) can drive the same flow without a browser.
+portal: CIDCO at `/cidco`, the architect at `/architect`. Every protocol call is also a plain HTTP
+API, so an architect's station (or Postman) can drive the same flow without a browser.
 
 **The flow**
 
@@ -117,6 +135,52 @@ flow and saves the clientId, secret and token into collection variables automati
 
 ---
 
+## Channel 2 — SFTP file transfer
+
+The architect uploads an **Excel workbook** of readings over SFTP instead of calling an API. CIDCO
+previews the sheet on its dashboard and imports the rows. Portals: CIDCO at `/cidco/sftp`, the
+architect at `/architect/sftp`.
+
+**The flow**
+
+1. **CIDCO issues an SFTP user id and password** from *SFTP accounts* and emails it to the architect.
+2. **The architect connects** to the SFTP server with those credentials. This first connection *is*
+   the handshake request: the server verifies the credentials, records the IP address and SSH client,
+   and **refuses the session**. Nothing is accepted until CIDCO says so.
+3. **CIDCO reviews it** in *Handshake requests* — who, from which address, with which client — and
+   approves. That whitelists the address and opens the channel; later connections from anywhere else
+   are refused.
+4. **The architect uploads** their filled-in `.xlsx` into the upload directory. The moment the
+   transfer closes CIDCO stores the file, parses the sheet and imports every row as a reading.
+5. **CIDCO previews it** in *Delivered workbooks*: the sheet exactly as it arrived, next to what was
+   stored. Rows are independent — a bad row is named with its sheet row number and reason while the
+   rest still import, so the upload lands as `PARSED`, `PARTIAL` or `FAILED`.
+
+The workbook's columns are the same AQI parameters as the API channel, and common alternative
+spellings (`PM 2.5`, `NO₂`, `AQI`, `Timestamp`, …) are accepted. Architects can download a ready-made
+template from their dashboard or `GET /api/architect/sftp/template`.
+
+**Running it.** The SFTP server is a separate process from the web app:
+
+```bash
+npm run sftp       # listens on SFTP_PORT, default 2222
+```
+
+| Method | Path | Description |
+| ------ | ---- | ----------- |
+| `GET`/`POST` | `/api/admin/sftp/accounts` | List SFTP accounts / issue a user id + password (returned once) |
+| `GET` | `/api/admin/sftp/validation-requests` | The handshake approval queue |
+| `POST` | `/api/admin/sftp/validation-requests/:id/approve` | Whitelist the address and open the channel |
+| `POST` | `/api/admin/sftp/validation-requests/:id/reject` | Refuse it; the server keeps blocking them |
+| `GET` | `/api/admin/sftp/uploads` | Every delivered workbook |
+| `GET` | `/api/admin/sftp/uploads/:id` | One workbook: full sheet preview + per-row results |
+| `GET` | `/api/architect/sftp/me` | The architect's account, connection details and upload history |
+| `GET` | `/api/architect/sftp/template` | The blank workbook to fill in |
+
+Full guide: **`/docs/sftp`** (in-app) and **`docs/SFTP_CHANNEL.md`**.
+
+---
+
 ## Stack
 
 | Layer     | Choice                                            |
@@ -162,6 +226,12 @@ Then edit `.env`:
 DATABASE_URL="postgresql://USER:PASSWORD@localhost:5432/cidco_aqi?schema=public"
 JWT_SECRET="a-long-random-string"
 UPLOAD_DIR="./uploads"
+
+# SFTP channel (optional — these are the defaults)
+SFTP_PORT=2222
+SFTP_HOST=0.0.0.0
+SFTP_STORAGE_DIR="./storage/sftp"
+# SFTP_PUBLIC_HOST="cidco.example.gov.in"   # hostname shown to architects
 ```
 
 ### 5. Create the tables and seed demo data
@@ -182,30 +252,39 @@ Seeded accounts (password `Password123` for both):
 
 ```bash
 npm run dev        # http://localhost:3000
+npm run sftp       # the SFTP intake, on port 2222 — a separate process
 ```
 
 Production:
 
 ```bash
 npm run build && npm start
+npm run sftp
 ```
+
+The SFTP server generates its SSH host key on first boot and keeps it, with every uploaded workbook,
+under `SFTP_STORAGE_DIR` (gitignored).
 
 ---
 
 ## Pages
 
-The UI is a single-screen portal at `/` (tabs), plus the architect docs page:
-
-There are **two portals**, each with its own sign-in:
+`/` is the front door: one page to sign in or sign up as either a CIDCO officer or an architect.
+After signing in you choose **API** or **SFTP**, and that dashboard opens.
 
 | Route              | Portal | Purpose                                                        |
 | ------------------ | ------ | -------------------------------------------------------------- |
-| `/`                | CIDCO admin | API Tester, API Logs, AQI Data, Architect Handshakes, **Validation Requests**, Token Requests, Communication Logs |
-| `/architect`       | Architect | Connection (hit the API, request tokens), Messages (tokens from CIDCO), Send AQI data (**Automate**), My readings, Activity log |
-| `/docs/architect`  | — | Architect integration guide (validation, tokens, sending data)  |
+| `/`                | — | Sign in / sign up, then pick your channel |
+| `/cidco`           | CIDCO · API | AQI Data, Architect Handshakes, **Validation Requests**, Token Requests, Communication Logs |
+| `/cidco/sftp`      | CIDCO · SFTP | **Delivered workbooks** (sheet preview), Handshake requests, SFTP accounts |
+| `/architect`       | Architect · API | Connection, Messages (tokens from CIDCO), Send AQI data (**Automate**), My readings, Activity log |
+| `/architect/sftp`  | Architect · SFTP | Handshake status, connection details, workbook template, upload results |
+| `/docs/architect`  | — | API channel guide (validation, tokens, sending data) |
+| `/docs/sftp`       | — | SFTP channel guide (handshake, the workbook, uploading) |
 
 Seeded logins: CIDCO officer `officer@cidco.example` / `Password123`; architect
-`architect@example.com` / `Password123`. Both portals link to each other from the header.
+`architect@example.com` / `Password123`. Every dashboard links to its sibling channel and back to the
+chooser from the header.
 
 ### Architect portal (`/architect`)
 
@@ -441,3 +520,11 @@ psql "$DATABASE_URL" -c 'SELECT "referenceNo","monitoringStationId","aqiValue","
 | `npm run db:push`   | Push the schema without a migration  |
 | `npm run db:seed`   | Seed demo users, projects, reports   |
 | `npm run db:studio` | Prisma Studio                        |
+| `npm run sftp`      | The SFTP intake server (port 2222)   |
+
+End-to-end checks, with the servers running:
+
+```bash
+npx tsx scripts/api-e2e.ts    # the API channel, front to back
+npx tsx scripts/sftp-e2e.ts   # the SFTP channel, over a real SFTP client
+```

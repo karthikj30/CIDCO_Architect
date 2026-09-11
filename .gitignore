@@ -10,3 +10,6 @@ uploads/*
 !uploads/.gitkeep
 .DS_Store
 npm-debug.log*
+
+# SFTP intake: the server's host key and every workbook architects upload
+storage/

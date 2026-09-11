@@ -1,28 +1,28 @@
 import type { Metadata } from 'next';
-import ArchitectWorkspace from '@/components/architect/ArchitectWorkspace';
+import ArchitectSftpWorkspace from '@/components/architect/sftp/ArchitectSftpWorkspace';
 import ChannelHeader from '@/components/ChannelHeader';
 
 export const metadata: Metadata = {
-  title: 'Architect API Portal — CIDCO AQI',
-  description: 'Validate with CIDCO, manage your tokens and send AQI data over the API.',
+  title: 'Architect SFTP Portal — CIDCO AQI',
+  description: 'Connect to CIDCO over SFTP and upload your AQI readings as an Excel workbook.',
 };
 
 export const dynamic = 'force-dynamic';
 
-export default function ArchitectApiPortalPage() {
+export default function ArchitectSftpPortalPage() {
   return (
     <div className="flex min-h-screen flex-col overflow-hidden bg-slate-50 font-sans text-slate-900">
       <ChannelHeader
         badge="A"
         title="Architect Portal"
-        subtitle="API integration"
-        accent="emerald"
+        subtitle="SFTP file transfer"
+        accent="violet"
         links={[
-          { href: '/architect/sftp', label: 'SFTP portal' },
+          { href: '/architect', label: 'API portal' },
           { href: '/', label: 'Switch channel' },
         ]}
       />
-      <ArchitectWorkspace />
+      <ArchitectSftpWorkspace />
     </div>
   );
 }
