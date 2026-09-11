@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useRef, useState } from 'react';
+import { readJson } from '@/lib/fetchJson';
 
 /**
  * The WinSCP-style half of the architect's SFTP workspace.
@@ -156,7 +157,7 @@ export default function FileTransferPanes({
         body.set('file', file);
 
         const res = await fetch('/api/architect/sftp/transfer', { method: 'POST', body });
-        const json = await res.json();
+        const json = await readJson(res);
         if (!res.ok) {
           note(false, `${file.name} — ${json.error ?? 'transfer refused'}`);
           return;

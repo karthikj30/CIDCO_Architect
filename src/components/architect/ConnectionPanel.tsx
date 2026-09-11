@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { fmt, relativeTime, type StoredTokens } from './useTokens';
 import type { MeData } from './ArchitectWorkspace';
+import { readJson } from '@/lib/fetchJson';
 
 function Badge({ status }: { status: string }) {
   const style: Record<string, string> = {
@@ -79,7 +80,7 @@ export default function ConnectionPanel({
           ...(deviceInfo ? { deviceInfo } : {}),
         }),
       });
-      const json = await res.json();
+      const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? 'Validation failed');
       setClientSecret('');
       setNotice(json.data.message);
@@ -102,7 +103,7 @@ export default function ConnectionPanel({
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ refreshToken: refreshInput || tokens.refreshToken, reason: 'Access token expired' }),
       });
-      const json = await res.json();
+      const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? 'Request failed');
       setRefreshInput('');
       setNotice(json.data.message);

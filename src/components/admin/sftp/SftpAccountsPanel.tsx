@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { StatusBadge } from '../CopyField';
+import { readJson } from '@/lib/fetchJson';
 
 type Account = {
   id: string;
@@ -41,7 +42,7 @@ export default function SftpAccountsPanel() {
   const load = useCallback(async () => {
     try {
       const res = await fetch('/api/admin/sftp/accounts');
-      const json = await res.json();
+      const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? 'Failed to load');
       setRows(json.data.accounts);
       setEndpoint(json.data.endpoint);

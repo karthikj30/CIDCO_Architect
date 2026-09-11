@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { readJson } from '@/lib/fetchJson';
 
 type Row = {
   id: string;
@@ -62,7 +63,7 @@ export default function DataTablePanel() {
       if (q) params.set('q', q);
       if (source) params.set('source', source);
       const res = await fetch(`/api/admin/reports?${params.toString()}`);
-      const json = await res.json();
+      const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? 'Failed to load');
       setRows(json.data.rows);
       setTotal(json.data.total);

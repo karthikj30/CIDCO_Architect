@@ -3,6 +3,7 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
 import CopyField, { StatusBadge } from './CopyField';
 import HandshakeTimeline from './HandshakeTimeline';
+import { readJson } from '@/lib/fetchJson';
 
 type Handshake = {
   id: string;
@@ -39,7 +40,7 @@ export default function HandshakesPanel() {
     setLoading(true);
     try {
       const res = await fetch('/api/admin/handshakes');
-      const json = await res.json();
+      const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? 'Failed to load');
       setRows(json.data.handshakes);
       setError(null);
@@ -65,7 +66,7 @@ export default function HandshakesPanel() {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ architectEmail, expiresInDays: Number(expiresInDays) }),
       });
-      const json = await res.json();
+      const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? 'Failed to issue credentials');
       setCredential(JSON.stringify(json.data.credential, null, 2));
       await load();
@@ -253,7 +254,7 @@ function HandshakeDetail({ handshakeId, clientId, onChanged }: { handshakeId: st
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/admin/handshakes/${handshakeId}`);
-    const json = await res.json();
+    const json = await readJson(res);
     if (res.ok) {
       const d: Detail = json.data.handshake;
       setDetail(d);
@@ -281,7 +282,7 @@ function HandshakeDetail({ handshakeId, clientId, onChanged }: { handshakeId: st
           enforceWhitelist: enforce,
         }),
       });
-      const json = await res.json();
+      const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? 'Could not save policy');
       setNotice('Token policy saved — applies to the next token issued.');
       await load(); onChanged();
@@ -300,7 +301,7 @@ function HandshakeDetail({ handshakeId, clientId, onChanged }: { handshakeId: st
           refreshExpiresAt: refreshExp ? new Date(refreshExp).toISOString() : undefined,
         }),
       });
-      const json = await res.json();
+      const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? 'Could not update expiry');
       setNotice('Live token expiry updated.');
       await load(); onChanged();
@@ -312,7 +313,7 @@ function HandshakeDetail({ handshakeId, clientId, onChanged }: { handshakeId: st
     setBusy(true); setError(null); setNotice(null);
     try {
       const res = await fetch(`/api/admin/handshakes/${handshakeId}/whitelist`, { method: 'DELETE' });
-      const json = await res.json();
+      const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? 'Could not reset whitelist');
       setNotice('Whitelist cleared.');
       await load(); onChanged();
@@ -336,7 +337,7 @@ function HandshakeDetail({ handshakeId, clientId, onChanged }: { handshakeId: st
           refreshExpiresInDays: Number(refreshTtl),
         }),
       });
-      const json = await res.json();
+      const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? 'Token generation failed');
       setFreshPair({ access: json.data.token.accessToken, refresh: json.data.token.refreshToken });
       setNotice(json.data.message);

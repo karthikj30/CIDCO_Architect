@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { StoredTokens } from './useTokens';
 import { relativeTime } from './useTokens';
+import { readJson } from '@/lib/fetchJson';
 
 type LogLine = {
   at: string;
@@ -71,7 +72,7 @@ export default function AutomatePanel({
         headers: { 'content-type': 'application/json', authorization: `Bearer ${tokens.accessToken ?? ''}` },
         body: JSON.stringify(body),
       });
-      const json = await res.json();
+      const json = await readJson(res);
       const line: LogLine = {
         at: new Date().toLocaleTimeString('en-IN'),
         ok: res.ok,

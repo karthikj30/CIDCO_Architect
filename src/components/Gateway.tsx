@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { readJson } from '@/lib/fetchJson';
 
 /**
  * The single front door to the portal.
@@ -35,8 +36,8 @@ const CHANNELS = [
   {
     key: 'SFTP',
     name: 'SFTP file transfer',
-    blurb: 'The architect uploads an Excel workbook of readings over SFTP. CIDCO previews the sheet and imports it.',
-    detail: 'User id + password · .xlsx workbooks · sheet preview',
+    blurb: 'The architect sends a CSV of readings over SFTP, automatically. CIDCO validates every transfer and imports it.',
+    detail: 'User id + password · CSV over SFTP · per-transfer validation',
     officerHref: '/cidco/sftp',
     architectHref: '/architect/sftp',
     accent: 'violet',
@@ -68,7 +69,7 @@ export default function Gateway() {
     try {
       const res = await fetch('/api/auth/me');
       if (!res.ok) return setUser(null);
-      const json = await res.json();
+      const json = await readJson(res);
       setUser(json?.success ? json.data.user : null);
     } catch {
       setUser(null);
@@ -105,7 +106,7 @@ export default function Gateway() {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       });
-      const json = await res.json();
+      const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? 'Could not sign you in');
       setUser(json.data.user);
     } catch (err) {

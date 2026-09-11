@@ -5,6 +5,7 @@ import AdminSignIn from '../AdminSignIn';
 import SftpAccountsPanel from './SftpAccountsPanel';
 import SftpCompaniesPanel from './SftpCompaniesPanel';
 import SftpUploadsPanel from './SftpUploadsPanel';
+import { readJson } from '@/lib/fetchJson';
 
 /**
  * CIDCO's SFTP workspace: the company register, the credentials issued against
@@ -41,7 +42,7 @@ export default function SftpPortalWorkspace() {
 
   useEffect(() => {
     fetch('/api/auth/me')
-      .then((r) => (r.ok ? r.json() : null))
+      .then((r) => (r.ok ? readJson(r) : null))
       .then((j) => {
         if (j?.success && j.data.user.role !== 'ARCHITECT') setAdmin(j.data.user);
       })

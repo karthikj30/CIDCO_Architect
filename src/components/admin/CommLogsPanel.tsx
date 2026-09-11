@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import HandshakeTimeline from './HandshakeTimeline';
+import { readJson } from '@/lib/fetchJson';
 
 type Log = {
   id: string;
@@ -42,7 +43,7 @@ export default function CommLogsPanel() {
     try {
       const qs = filter ? `?handshakeId=${filter}&limit=200` : '?limit=200';
       const res = await fetch(`/api/admin/comm-logs${qs}`);
-      const json = await res.json();
+      const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? 'Failed to load');
       setLogs(json.data.logs);
       setError(null);
@@ -56,7 +57,7 @@ export default function CommLogsPanel() {
   // Load the handshake list once for the filter dropdown.
   useEffect(() => {
     fetch('/api/admin/handshakes')
-      .then((r) => (r.ok ? r.json() : null))
+      .then((r) => (r.ok ? readJson(r) : null))
       .then((j) => j?.success && setHandshakes(j.data.handshakes))
       .catch(() => {});
   }, []);

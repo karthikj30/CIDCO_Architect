@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { StatusBadge } from './CopyField';
+import { readJson } from '@/lib/fetchJson';
 
 type Req = {
   id: string;
@@ -36,7 +37,7 @@ export default function ValidationRequestsPanel() {
   const load = useCallback(async () => {
     try {
       const res = await fetch('/api/admin/validation-requests');
-      const json = await res.json();
+      const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? 'Failed to load');
       setRows(json.data.requests);
       setError(null);
@@ -67,7 +68,7 @@ export default function ValidationRequestsPanel() {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(note ? { reviewNote: note } : {}),
       });
-      const json = await res.json();
+      const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? 'Action failed');
       setNotice(json.data.message);
       await load();

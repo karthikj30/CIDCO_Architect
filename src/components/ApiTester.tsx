@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { readJson } from '@/lib/fetchJson';
 
 export default function ApiTester() {
   const [method, setMethod] = useState('GET');
@@ -43,7 +44,7 @@ export default function ApiTester() {
       let data;
       const contentType = res.headers.get('content-type');
       if (contentType && contentType.includes('application/json')) {
-        data = await res.json();
+        data = await readJson(res);
       } else {
         data = await res.text();
       }

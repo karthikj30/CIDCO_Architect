@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { readJson } from '@/lib/fetchJson';
 
 type AdminUser = { id: string; name: string; email: string; role: string };
 
@@ -20,7 +21,7 @@ export default function AdminSignIn({ onSignedIn }: { onSignedIn: (user: AdminUs
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ email, password }),
       });
-      const json = await res.json();
+      const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? 'Sign in failed');
       if (json.data.user.role === 'ARCHITECT') {
         throw new Error('This account is an architect. Sign in as a CIDCO officer.');

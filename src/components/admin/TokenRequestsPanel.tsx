@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import CopyField, { StatusBadge } from './CopyField';
+import { readJson } from '@/lib/fetchJson';
 
 type Req = {
   id: string;
@@ -28,7 +29,7 @@ export default function TokenRequestsPanel() {
     setLoading(true);
     try {
       const res = await fetch('/api/admin/token-requests');
-      const json = await res.json();
+      const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? 'Failed to load');
       setRows(json.data.tokenRequests);
       setError(null);
@@ -51,7 +52,7 @@ export default function TokenRequestsPanel() {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ expiresInDays: Number(days) }),
       });
-      const json = await res.json();
+      const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? 'Approve failed');
       setIssued({ id, token: json.data.token.token });
       await load();

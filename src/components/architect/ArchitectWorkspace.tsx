@@ -9,6 +9,7 @@ import MessagesPanel from './MessagesPanel';
 import MyReadingsPanel from './MyReadingsPanel';
 import ActivityPanel from './ActivityPanel';
 import { useTokens } from './useTokens';
+import { readJson } from '@/lib/fetchJson';
 
 export type MeData = {
   architect: { id: string; name: string; email: string; firmName: string | null };
@@ -75,7 +76,7 @@ export default function ArchitectWorkspace() {
   const reload = useCallback(async () => {
     const res = await fetch('/api/architect/me');
     if (res.ok) {
-      const json = await res.json();
+      const json = await readJson(res);
       setMe(json.data);
       setArchitect((prev) => prev ?? { ...json.data.architect, role: 'ARCHITECT' });
     }

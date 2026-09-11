@@ -7,6 +7,7 @@ import TokenRequestsPanel from './admin/TokenRequestsPanel';
 import CommLogsPanel from './admin/CommLogsPanel';
 import ValidationRequestsPanel from './admin/ValidationRequestsPanel';
 import DataTablePanel from './admin/DataTablePanel';
+import { readJson } from '@/lib/fetchJson';
 
 type Tab = 'data' | 'handshakes' | 'validations' | 'requests' | 'comm';
 type AdminUser = { id: string; name: string; email: string; role: string };
@@ -42,7 +43,7 @@ export default function PortalWorkspace() {
   // Detect an existing CIDCO officer session (cookie) so admin tabs open directly.
   useEffect(() => {
     fetch('/api/auth/me')
-      .then((r) => (r.ok ? r.json() : null))
+      .then((r) => (r.ok ? readJson(r) : null))
       .then((j) => {
         if (j?.success && j.data.user.role !== 'ARCHITECT') setAdmin(j.data.user);
       })

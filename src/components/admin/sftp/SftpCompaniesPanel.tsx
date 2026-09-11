@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import CopyField, { StatusBadge } from '../CopyField';
+import { readJson } from '@/lib/fetchJson';
 
 type Credential = {
   id: string;
@@ -55,7 +56,7 @@ export default function SftpCompaniesPanel() {
   const load = useCallback(async () => {
     try {
       const res = await fetch('/api/admin/sftp/companies');
-      const json = await res.json();
+      const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? 'Failed to load');
       setRows(json.data.companies);
       setError(null);
@@ -89,7 +90,7 @@ export default function SftpCompaniesPanel() {
           notes: form.notes || undefined,
         }),
       });
-      const json = await res.json();
+      const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? 'Could not register the company');
       setNotice(json.data.message);
       setForm({ companyName: '', companyId: '', architectServerIp: '', filePath: '', architectEmail: '', notes: '' });
@@ -113,7 +114,7 @@ export default function SftpCompaniesPanel() {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ companyId }),
       });
-      const json = await res.json();
+      const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? 'Could not issue credentials');
       setCredential(JSON.stringify(json.data.credential, null, 2));
       setNotice(json.data.message);
@@ -133,7 +134,7 @@ export default function SftpCompaniesPanel() {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ active: !c.active }),
       });
-      const json = await res.json();
+      const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? 'Could not update');
       await load();
     } catch (err) {

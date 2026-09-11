@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { readJson } from '@/lib/fetchJson';
 
 type Row = {
   id: string;
@@ -143,7 +144,7 @@ export default function SftpUploadsPanel() {
   const load = useCallback(async () => {
     try {
       const res = await fetch('/api/admin/sftp/uploads');
-      const json = await res.json();
+      const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? 'Failed to load');
       setRows(json.data.uploads);
       setError(null);
@@ -177,7 +178,7 @@ export default function SftpUploadsPanel() {
     setDetail(null);
     try {
       const res = await fetch(`/api/admin/sftp/uploads/${id}`);
-      const json = await res.json();
+      const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? 'Failed to load the sheet');
       setDetail(json.data.upload);
     } catch (err) {

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import ArchitectSignIn, { type Architect } from './ArchitectSignIn';
+import { readJson } from '@/lib/fetchJson';
 
 /**
  * What an architect who has no portal account yet sees.
@@ -86,7 +87,7 @@ export default function ArchitectOnboarding({ onSignedIn }: { onSignedIn: (a: Ar
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ clientId: id, clientSecret: secret }),
       });
-      const json = await res.json();
+      const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? 'Could not check your status');
       const data = json.data as StatusData;
       setStatus(data);
@@ -126,7 +127,7 @@ export default function ArchitectOnboarding({ onSignedIn }: { onSignedIn: (a: Ar
           deviceInfo: typeof navigator === 'undefined' ? undefined : navigator.userAgent,
         }),
       });
-      const json = await res.json();
+      const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? 'Validation failed');
       setNotice(json.data.message);
       setStep('awaiting');
@@ -163,7 +164,7 @@ export default function ArchitectOnboarding({ onSignedIn }: { onSignedIn: (a: Ar
           address: form.address || undefined,
         }),
       });
-      const json = await res.json();
+      const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? 'Could not set up your account');
       onSignedIn({ ...json.data.user, role: 'ARCHITECT' });
     } catch (err) {

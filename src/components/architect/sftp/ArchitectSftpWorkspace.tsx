@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import ArchitectSignIn, { type Architect } from '../ArchitectSignIn';
 import FileTransferPanes from './FileTransferPanes';
+import { readJson } from '@/lib/fetchJson';
 
 /**
  * The architect's SFTP workspace.
@@ -69,7 +70,7 @@ export default function ArchitectSftpWorkspace() {
   const reload = useCallback(async () => {
     const res = await fetch('/api/architect/sftp/me');
     if (res.ok) {
-      const json = await res.json();
+      const json = await readJson(res);
       setMe(json.data);
       setArchitect((prev) => prev ?? { ...json.data.architect, role: 'ARCHITECT' });
     }

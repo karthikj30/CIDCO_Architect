@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { readJson } from '@/lib/fetchJson';
 
 const STATUSES = ['SUBMITTED', 'UNDER_REVIEW', 'APPROVED', 'REJECTED'] as const;
 
@@ -22,7 +23,7 @@ export default function ReviewPanel({ reportId, currentStatus }: { reportId: str
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ status, reviewNote }),
       });
-      const json = await res.json();
+      const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? 'Review failed');
       router.refresh();
     } catch (err) {
