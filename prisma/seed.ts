@@ -1,7 +1,46 @@
+import { createHash } from 'crypto';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
+
+/** Fixed local-dev handshake credentials for Connect with CIDCO demos. */
+const DEMO_HANDSHAKES = [
+  {
+    n: 1,
+    clientId: 'ARCH-DEMO00000001',
+    clientSecret: 'hs_sec_demo_local_dev_only_0001',
+    label: 'Demo Architect 1',
+  },
+  {
+    n: 2,
+    clientId: 'ARCH-DEMO00000002',
+    clientSecret: 'hs_sec_demo_local_dev_only_0002',
+    label: 'Demo Architect 2',
+  },
+  {
+    n: 3,
+    clientId: 'ARCH-DEMO00000003',
+    clientSecret: 'hs_sec_demo_local_dev_only_0003',
+    label: 'Demo Architect 3',
+  },
+  {
+    n: 4,
+    clientId: 'ARCH-DEMO00000004',
+    clientSecret: 'hs_sec_demo_local_dev_only_0004',
+    label: 'Demo Architect 4',
+  },
+  {
+    n: 5,
+    clientId: 'ARCH-DEMO00000005',
+    clientSecret: 'hs_sec_demo_local_dev_only_0005',
+    label: 'Demo Architect 5',
+  },
+] as const;
+
+function sha256(value: string) {
+  return createHash('sha256').update(value).digest('hex');
+}
 
 async function main() {
   const passwordHash = await bcrypt.hash('Password123', 10);
@@ -17,6 +56,7 @@ async function main() {
       firmName: 'Deshmukh Associates',
       councilRegNo: 'CA/2019/12345',
       phone: '+91 98200 11223',
+      accountSetupAt: new Date(),
     },
   });
 
@@ -30,6 +70,56 @@ async function main() {
       role: 'CIDCO_OFFICER',
     },
   });
+
+  const officer = await prisma.user.findUnique({ where: { email: 'officer@cidco.example' } });
+  const credentialExpiresAt = new Date();
+  credentialExpiresAt.setFullYear(credentialExpiresAt.getFullYear() + 1);
+
+  // One placeholder architect + PENDING handshake per demo credential.
+  // accountSetupAt stays null until they register after CIDCO approval.
+  for (const demo of DEMO_HANDSHAKES) {
+    const email = `pending-demo-${demo.n}@cidco.local`;
+    const pendingArchitect = await prisma.user.upsert({
+      where: { email },
+      update: { name: `${demo.label} (pending setup)` },
+      create: {
+        email,
+        name: `${demo.label} (pending setup)`,
+        passwordHash: await bcrypt.hash(`unused-${demo.clientId}`, 10),
+        role: 'ARCHITECT',
+      },
+    });
+
+    await prisma.architectHandshake.upsert({
+      where: { clientId: demo.clientId },
+      update: {
+        architectId: pendingArchitect.id,
+        secretHash: sha256(demo.clientSecret),
+        secretPrefix: demo.clientSecret.slice(0, 14),
+        credentialExpiresAt,
+        status: 'PENDING',
+        architectValidatedAt: null,
+        establishedAt: null,
+        lastValidatedIp: null,
+        whitelistedIp: null,
+        deviceInfo: null,
+        deviceFingerprint: null,
+        whitelistedAt: null,
+        enforceWhitelist: false,
+        revokedAt: null,
+      },
+      create: {
+        architectId: pendingArchitect.id,
+        clientId: demo.clientId,
+        secretHash: sha256(demo.clientSecret),
+        secretPrefix: demo.clientSecret.slice(0, 14),
+        credentialExpiresAt,
+        status: 'PENDING',
+        createdById: officer?.id,
+        enforceWhitelist: false,
+      },
+    });
+  }
 
   const projects = [
     { code: 'CIDCO-KHR-012', name: 'Kharghar Sector 12 Township', node: 'Kharghar', plotNumber: '12/A' },
@@ -81,8 +171,12 @@ async function main() {
   }
 
   console.log('Seed complete.');
-  console.log('  Architect : architect@example.com / Password123');
-  console.log('  Officer   : officer@cidco.example / Password123');
+  console.log('  Architect login : architect@example.com / Password123');
+  console.log('  Officer login   : officer@cidco.example / Password123');
+  console.log('  Connect demos   :');
+  for (const demo of DEMO_HANDSHAKES) {
+    console.log(`    ${demo.clientId} / ${demo.clientSecret}`);
+  }
 }
 
 main()
