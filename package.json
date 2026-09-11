@@ -3,16 +3,17 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 3000",
+    "dev": "prisma generate && next dev -p 3000",
     "build": "prisma generate && next build",
     "start": "next start -p 3000",
     "lint": "next lint",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
-    "db:seed": "tsx prisma/seed.ts",
+    "db:seed": "prisma generate && tsx prisma/seed.ts",
     "db:studio": "prisma studio",
-    "sftp": "tsx scripts/sftp-server.ts"
+    "sftp": "prisma generate && tsx scripts/sftp-server.ts",
+    "postinstall": "prisma generate"
   },
   "dependencies": {
     "@prisma/client": "^6.2.1",

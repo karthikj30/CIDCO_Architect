@@ -95,6 +95,10 @@ npx prisma migrate deploy
 npm run db:seed
 ```
 
+> The Prisma client is generated from `prisma/schema.prisma` and is **not** committed. `npm install`,
+> `npm run dev`, `npm run build`, `npm run sftp` and `npm run db:seed` all run `prisma generate`
+> first, so after a `git pull` you only need `npx prisma migrate deploy` for new migrations.
+
 Seeded accounts (password for both: `Password123`):
 
 | Role          | Email                 |
@@ -175,15 +179,30 @@ netstat -ano | findstr ":3000"
 npm run dev
 ```
 
+**"Cannot read properties of undefined (reading 'findMany')", or "Unknown field ... on model ..."**
+
+Your generated Prisma client is older than `prisma/schema.prisma`. The client is built from the
+schema and is not in git, so a pull that changes the schema leaves it stale.
+
+`npm run dev`, `npm run build`, `npm run sftp`, `npm run db:seed` and `npm install` all regenerate it
+automatically, so this normally fixes itself. If you started the server some other way:
+
+```powershell
+npx prisma generate
+npx prisma migrate deploy
+```
+
+then restart. (`src/lib/prisma.ts` checks for this at startup and says so plainly rather than failing
+with an undefined error.)
+
 **Prisma `EPERM` / locked query engine (Windows)**
 
-This repo can generate the client to `src/generated/prisma` (see `prisma/schema.prisma` `output`). After schema changes:
+The query engine cannot be rewritten while a node process is holding it. Stop every running
+`npm run dev` / `npm run sftp` window, then:
 
 ```powershell
 npx prisma generate
 ```
-
-Ensure imports use `@/generated/prisma` (see `src/lib/prisma.ts`) if the default `@prisma/client` engine file is locked.
 
 **Docker Desktop not running**
 
@@ -221,9 +240,11 @@ git pull origin main
 docker start cidco-postgres
 
 # 3. Schema catch-up (after pulls that add migrations)
-npx prisma generate
 npx prisma migrate deploy
 
-# 4. App
+# 4. App  (regenerates the Prisma client for you)
 npm run dev
+
+# 5. SFTP intake, in a second window
+npm run sftp
 ```
