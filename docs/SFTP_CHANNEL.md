@@ -219,6 +219,8 @@ Officer-only, session-authenticated — the transfer itself is SFTP, not HTTP.
 | `POST` | `/api/admin/sftp/accounts` | Issue credentials against a registration (step 1) |
 | `GET` | `/api/admin/sftp/uploads` | Every transfer, with its validation result |
 | `GET` | `/api/admin/sftp/uploads/:id` | One transfer: the full comparison and a preview of the file |
+| `GET` | `/api/admin/sftp/data` | The data table as a company / month / timestamp tree |
+| `GET` | `/api/admin/sftp/data/:id/download` | One filed CSV, byte for byte as it arrived |
 
 Architect:
 
@@ -242,3 +244,70 @@ It registers a company, issues credentials against it, sends a CSV over a real S
 checks the validation both ways — an accepted transfer that stores its rows, one written to the
 wrong path that is refused with nothing stored, and a connection from an unregistered address that
 never authenticates. `scripts/api-e2e.ts` does the same for the API channel.
+
+
+---
+
+## The Windows agent
+
+Most architects will not run an SFTP client by hand. They install the **CIDCO AQI Agent** — a small
+Windows program kept in [`karthikj30/CIDCO_WinEXE`](https://github.com/karthikj30/CIDCO_WinEXE) —
+which watches their export folder and sends the newest CSV on a schedule.
+
+It is the same channel and the same validation; only the sign-in differs.
+
+### One shared login, and the company in the path
+
+Rather than a per-company SFTP user id, the agent signs in with a single login CIDCO publishes:
+
+| | |
+|---|---|
+| User id | `SFTP_SHARED_USER`, default `cidco@example.com` |
+| Password | `SFTP_SHARED_PASSWORD`, default `123456` |
+
+That login says *an architect is calling*. It does not say **which** one — that comes from the
+company id at the front of the upload path:
+
+```
+/<companyId>/<the folder the CSV was taken from>/<file>.csv
+/ABCD123/C:/CIDCO/exports/readings.csv
+```
+
+The server reads the company id when the file is opened and looks it up in the master table. An
+unregistered or deactivated id is refused there and then with `PERMISSION_DENIED` — the bytes are
+never accepted. A **registered** company whose IP or file path does not match is allowed to finish
+the upload and then recorded as `REJECTED`, with the reason, so the officer can see a misconfigured
+agent rather than silence. Either way nothing is stored.
+
+### The data table
+
+An accepted file is written under `CIDCO_DATA_DIR` (default `./storage/cidco-data`) as
+
+```
+<companyId>/<Month>/<timestamp>/<file>.csv
+ABCD123/2026-09-September/2026-09-18_Friday_07-02-17/readings.csv
+```
+
+and a `data_files` row records where it landed, how many rows it held, how many were stored, the
+address it came from and when. The **Data** tab in `/cidco/sftp` walks that tree, showing each
+company's master row above it, and every file can be downloaded exactly as it arrived.
+
+So the two tables divide as CIDCO asked:
+
+- **master** — `companies`, one row per registration: company id, name, architect server IP, file
+  path, contact.
+- **data** — `data_files`, the folder tree of everything accepted, underneath its company.
+
+### The CSV
+
+```
+Project / Site ID, AQI Monitoring Station / Device ID, OEM / Model,
+Date & Time of Reading, AQI Value, PM2.5, PM10, NO₂, SO₂, CO, O₃,
+Temperature, Humidity, Other applicable environmental parameters,
+Data Source / Integration Method, Data Receipt Timestamp
+```
+
+Headers are matched on their letters and digits alone, so `PM 2.5` and `PM2.5`, `NO₂` and `NO2`,
+`Station/Device ID` and `AQI Monitoring Station / Device ID` all reach the same field. A column
+CIDCO does not recognise is kept in the preview and otherwise ignored, so an architect never has to
+rename an existing sheet to be accepted.

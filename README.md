@@ -183,6 +183,61 @@ their own files on the left (open a folder, browse it), CIDCO on the right at th
 They enter the user id, password and designated IP and drag a CSV across. Those transfers are marked
 `PORTAL` rather than `DIRECT_SFTP` and go through identical validation.
 
+### The Windows agent
+
+Architects who would rather not drag files by hand install the **CIDCO AQI Agent**, a small Windows
+program that watches their export folder and sends the newest CSV on a schedule. It lives in its own
+repository — [`karthikj30/CIDCO_WinEXE`](https://github.com/karthikj30/CIDCO_WinEXE) — and talks to
+this server and nothing else.
+
+It signs in with **one shared SFTP login** (`SFTP_SHARED_USER` / `SFTP_SHARED_PASSWORD`, by default
+`cidco@example.com` / `123456`) and names its company in the upload path:
+
+```
+/<companyId>/<the folder the CSV was taken from>/<file>.csv
+/ABCD123/C:/CIDCO/exports/readings.csv
+```
+
+The shared login proves the sender is an architect; it does not say *which* architect. That comes
+from the company id in the path, and it is checked against the master record — along with the source
+IP and the declared file path — on every single transfer, exactly as for a per-company account. An
+unregistered or deactivated company id is refused at the door.
+
+### The master and data tables
+
+| Table | What it holds |
+| ----- | ------------- |
+| `companies` (**master**) | One row per company an officer registered: company id, name, the architect's server IP, the file path, contact |
+| `data_files` (**data**) | One row per accepted CSV, filed as a folder tree underneath its company |
+
+Accepted files are written under `CIDCO_DATA_DIR` as
+**`<companyId>/<Month>/<timestamp>/<file>.csv`**, e.g.
+
+```
+storage/cidco-data/
+└── ABCD123/
+    └── 2026-09-September/
+        └── 2026-09-18_Friday_07-02-17/
+            └── readings.csv
+```
+
+Officers browse that tree under **Data** in `/cidco/sftp`, with the company's master row shown above
+each one, and can download any file exactly as it arrived. A rejected transfer is still recorded
+under **Delivered transfers** with the reason, but nothing is filed and no reading is stored.
+
+The columns CIDCO reads:
+
+```
+Project / Site ID, AQI Monitoring Station / Device ID, OEM / Model,
+Date & Time of Reading, AQI Value, PM2.5, PM10, NO₂, SO₂, CO, O₃,
+Temperature, Humidity, Other applicable environmental parameters,
+Data Source / Integration Method, Data Receipt Timestamp
+```
+
+Headers are matched on their letters and digits alone, so `PM 2.5`, `NO2`, `Station/Device ID` and
+`AQI Monitoring Station / Device ID` all land on the same field; unknown columns are carried through
+to the preview and ignored.
+
 **Running it.** The SFTP server is a separate process from the web app:
 
 ```bash
@@ -199,6 +254,8 @@ npm run sftp       # listens on SFTP_PORT, default 2222
 | `GET` | `/api/architect/sftp/me` | The architect's registration, where to send, and every result |
 | `POST` | `/api/architect/sftp/transfer` | The portal's drag-and-drop send |
 | `GET` | `/api/architect/sftp/template` | The blank CSV (`?format=xlsx` for Excel) |
+| `GET` | `/api/admin/sftp/data` | The data table as a company / month / timestamp tree |
+| `GET` | `/api/admin/sftp/data/:id/download` | One filed CSV, byte for byte as it arrived |
 
 Full guide: **`/docs/sftp`** (in-app) and **`docs/SFTP_CHANNEL.md`**.
 
@@ -255,6 +312,11 @@ SFTP_PORT=2222
 SFTP_HOST=0.0.0.0
 SFTP_STORAGE_DIR="./storage/sftp"
 # SFTP_PUBLIC_HOST="cidco.example.gov.in"   # hostname shown to architects
+
+# The Windows agent's shared login, and where accepted CSVs are filed
+SFTP_SHARED_USER="cidco@example.com"
+SFTP_SHARED_PASSWORD="123456"
+CIDCO_DATA_DIR="./storage/cidco-data"
 ```
 
 ### 5. Create the tables and seed demo data

@@ -1,4 +1,5 @@
 import { createHash, timingSafeEqual } from 'crypto';
+import fs from 'fs/promises';
 import path from 'path';
 import ExcelJS from 'exceljs';
 import Papa from 'papaparse';
@@ -90,11 +91,33 @@ const HEADER_ALIASES: Record<string, string> = {
   'data source / integration method': 'integrationMethod',
 };
 
+/**
+ * Reduces a header to its letters and digits, so every way of writing the same
+ * column collapses onto one key: "AQI Monitoring Station / Device ID",
+ * "aqi monitoring station/device id" and "AQI_Monitoring_Station_Device_ID" all
+ * become "aqimonitoringstationdeviceid". Subscripts fold into digits so "NO₂"
+ * and "NO2" agree.
+ */
+function headerSlug(raw: string) {
+  return raw.toLowerCase().replace(/₂/g, '2').replace(/₃/g, '3').replace(/[^a-z0-9]/g, '');
+}
+
+/** Every known spelling, keyed by slug. Built once. */
+const HEADER_BY_SLUG: Record<string, string> = (() => {
+  const map: Record<string, string> = {};
+  for (const column of SHEET_COLUMNS) {
+    map[headerSlug(column.header)] = column.key;
+    map[headerSlug(column.key)] = column.key;
+  }
+  // Aliases win over the template spellings they overlap with.
+  for (const [spelling, key] of Object.entries(HEADER_ALIASES)) {
+    map[headerSlug(spelling)] = key;
+  }
+  return map;
+})();
+
 function canonicalHeader(raw: string) {
-  const lower = raw.trim().toLowerCase().replace(/\s+/g, ' ');
-  if (HEADER_ALIASES[lower]) return HEADER_ALIASES[lower];
-  const known = SHEET_COLUMNS.find((c) => c.header.toLowerCase() === lower || c.key.toLowerCase() === lower);
-  return known?.key ?? raw.trim();
+  return HEADER_BY_SLUG[headerSlug(raw)] ?? raw.trim();
 }
 
 // --- Credentials -----------------------------------------------------------
@@ -274,6 +297,11 @@ export function normalisePath(value: string | null | undefined) {
   return collapsed === '' ? '/' : collapsed;
 }
 
+/** A file path reduced to what two sides can agree on. */
+export function comparablePath(value: string | null | undefined) {
+  return normalisePath(value).replace(/^\/+/, '').toLowerCase();
+}
+
 export function normaliseIp(value: string | null | undefined) {
   if (!value) return '';
   const trimmed = value.trim();
@@ -289,7 +317,10 @@ export function normaliseIp(value: string | null | undefined) {
 export function validateTransfer(company: Company, presented: PresentedTransfer): TransferValidation {
   const companyIdMatch = (presented.companyId ?? '').trim() === company.companyId;
   const ipMatch = normaliseIp(presented.ip) === normaliseIp(company.architectServerIp);
-  const pathMatch = normalisePath(presented.filePath) === normalisePath(company.filePath);
+  // The agent carries the source folder inside the upload path, which cannot
+  // keep a leading slash, so compare both sides without one. "C:/CIDCO/exports"
+  // and "/var/aqi/exports" both survive the round trip.
+  const pathMatch = comparablePath(presented.filePath) === comparablePath(company.filePath);
   const passed = companyIdMatch && ipMatch && pathMatch && company.active;
 
   const mismatches: string[] = [];
@@ -492,6 +523,35 @@ export async function ingestTransfer(params: {
           ? 'PARTIAL'
           : 'PARSED';
 
+    // File it in the data tree — <companyId>/<month>/<timestamp>/<file> — and
+    // index that location in the data table.
+    if (company) {
+      try {
+        const at = new Date();
+        const where = dataTreeLocation(company.companyId, fileName, at);
+        await fs.mkdir(path.dirname(where.absolutePath), { recursive: true });
+        await fs.writeFile(where.absolutePath, buffer);
+        await prisma.dataFile.create({
+          data: {
+            companyRecordId: company.id,
+            companyId: company.companyId,
+            monthFolder: where.monthFolder,
+            timestampFolder: where.timestampFolder,
+            relativePath: where.relativePath,
+            fileName,
+            sizeBytes: buffer.length,
+            rowCount: outcome.rowCount,
+            importedCount: outcome.importedCount,
+            sourceIp,
+            uploadId: upload.id,
+            receivedAt: at,
+          },
+        });
+      } catch (error) {
+        console.error('[sftp] could not file the CSV in the data tree', error);
+      }
+    }
+
     return await prisma.sftpUpload.update({
       where: { id: upload.id },
       data: {
@@ -517,4 +577,111 @@ export async function ingestTransfer(params: {
       },
     });
   }
+}
+
+// --- The CIDCO data tree ---------------------------------------------------
+
+/**
+ * Where CIDCO files every accepted CSV:
+ *
+ *   <dataRoot>/<companyId>/<month>/<timestamp>/<file>.csv
+ *
+ * `companies` is the master table; `data_files` indexes this tree.
+ */
+export function dataRoot() {
+  return path.resolve(process.env.CIDCO_DATA_DIR || './storage/cidco-data');
+}
+
+const MONTHS = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/** Keeps a company id usable as a single folder name. */
+export function safeFolder(value: string) {
+  return value.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 80) || 'unknown';
+}
+
+/** "2026-09-September" — the month folder. */
+export function monthFolderFor(at: Date) {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${at.getFullYear()}-${p(at.getMonth() + 1)}-${MONTHS[at.getMonth()]}`;
+}
+
+/** "2026-09-18_Thursday_11-30-05" — month, date, day and time. */
+export function timestampFolderFor(at: Date) {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return (
+    `${at.getFullYear()}-${p(at.getMonth() + 1)}-${p(at.getDate())}` +
+    `_${DAYS[at.getDay()]}` +
+    `_${p(at.getHours())}-${p(at.getMinutes())}-${p(at.getSeconds())}`
+  );
+}
+
+export type DataTreeLocation = {
+  monthFolder: string;
+  timestampFolder: string;
+  relativePath: string;
+  absolutePath: string;
+};
+
+/** Works out where one delivered file belongs in the tree. */
+export function dataTreeLocation(companyId: string, fileName: string, at = new Date()): DataTreeLocation {
+  const company = safeFolder(companyId);
+  const monthFolder = monthFolderFor(at);
+  const timestampFolder = timestampFolderFor(at);
+  const safeName = safeFolder(fileName).replace(/_+/g, '_');
+  const relativePath = `${company}/${monthFolder}/${timestampFolder}/${safeName}`;
+  return {
+    monthFolder,
+    timestampFolder,
+    relativePath,
+    absolutePath: path.join(dataRoot(), company, monthFolder, timestampFolder, safeName),
+  };
+}
+
+// --- The shared CIDCO SFTP login -------------------------------------------
+
+/**
+ * The Windows agent signs in with one CIDCO username and password and names
+ * its company in the upload path, so a firm can run the agent without CIDCO
+ * minting a separate SSH account for it.
+ */
+export const SHARED_SFTP_USER = process.env.SFTP_SHARED_USER || 'cidco@example.com';
+export const SHARED_SFTP_PASSWORD = process.env.SFTP_SHARED_PASSWORD || '123456';
+
+export function isSharedSftpLogin(username: string, password: string) {
+  return username.trim().toLowerCase() === SHARED_SFTP_USER.toLowerCase() && password === SHARED_SFTP_PASSWORD;
+}
+
+/**
+ * The agent writes to `/<companyId>/<the path the CSV was taken from>/<file>`,
+ * which is how both the company and the source path reach CIDCO over a
+ * protocol that carries nothing but a filename.
+ */
+export function parseAgentPath(remotePath: string): { companyId: string; declaredPath: string } | null {
+  const clean = normalisePath(remotePath);
+  const withoutLeading = clean.replace(/^\/+/, '');
+  const dir = path.posix.dirname(`/${withoutLeading}`);
+  const segments = dir.replace(/^\/+/, '').split('/').filter(Boolean);
+  if (segments.length === 0) return null;
+  const [companyId, ...rest] = segments;
+  return { companyId, declaredPath: normalisePath(rest.join('/')) || '/' };
+}
+
+/**
+ * The remote path the agent writes to, built in one place so the server and
+ * the Windows agent cannot disagree about it:
+ *
+ *   /<companyId>/<the path the CSV was taken from>/<file>
+ *
+ * A Windows source path keeps its drive letter — "C:/CIDCO/exports" becomes
+ * "/ABCD123/C:/CIDCO/exports/readings.csv".
+ */
+export function agentRemotePath(companyId: string, filePath: string, fileName: string) {
+  const company = companyId.trim().replace(/^\/+|\/+$/g, '');
+  const source = normalisePath(filePath).replace(/^\/+/, '');
+  const name = path.posix.basename(fileName);
+  return `/${[company, source, name].filter(Boolean).join('/')}`;
 }

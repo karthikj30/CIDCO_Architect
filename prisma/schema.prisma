@@ -413,6 +413,7 @@ model Company {
   architect  User?                @relation("CompanyArchitect", fields: [architectId], references: [id], onDelete: SetNull)
   handshakes ArchitectHandshake[]
   reports    Report[]
+  dataFiles  DataFile[]
 
   @@index([architectId])
   @@map("companies")
@@ -458,6 +459,39 @@ model SftpUpload {
   @@index([handshakeId])
   @@index([status])
   @@map("sftp_uploads")
+}
+
+/// The DATA table.
+///
+/// Every CSV CIDCO accepts is filed on disk under
+/// `<companyId>/<month>/<timestamp>/<file>.csv`, and this row is the index of
+/// that tree: which company delivered it, which month and timestamp folder it
+/// landed in, and what was in it. `companies` is the matching MASTER table.
+model DataFile {
+  id              String   @id @default(cuid())
+  companyRecordId String
+  /// Denormalised so the folder tree can be read without a join.
+  companyId       String
+  /// e.g. "2026-09-September"
+  monthFolder     String
+  /// e.g. "2026-09-18_Thursday_11-30-05"
+  timestampFolder String
+  /// Path under the data root: <companyId>/<month>/<timestamp>/<file>
+  relativePath    String
+  fileName        String
+  sizeBytes       Int
+  rowCount        Int      @default(0)
+  importedCount   Int      @default(0)
+  sourceIp        String?
+  uploadId        String?  @unique
+  receivedAt      DateTime @default(now())
+
+  company Company @relation(fields: [companyRecordId], references: [id], onDelete: Cascade)
+
+  @@index([companyRecordId])
+  @@index([companyId])
+  @@index([monthFolder])
+  @@map("data_files")
 }
 
 /// An architect's request for a fresh token (typically after expiry). The

@@ -183,10 +183,26 @@ async function main() {
     });
   }
 
+  // The demo company the Windows agent ships pointed at.
+  await prisma.company.upsert({
+    where: { companyId: 'ABCD123' },
+    update: {},
+    create: {
+      companyId: 'ABCD123',
+      companyName: 'Demo Architect Firm',
+      // Local by default so the agent works against a dev server out of the box.
+      architectServerIp: process.env.DEMO_COMPANY_IP || '127.0.0.1',
+      filePath: process.env.DEMO_COMPANY_PATH || 'C:/CIDCO/exports',
+      contactEmail: 'demo@architect.example',
+      notes: 'Seeded for the CIDCO_WinEXE Windows agent.',
+    },
+  });
+
   console.log('Seed complete.');
   console.log('  Architect login : cidco@gmail.com / 123456   (shared, for every architect)');
   console.log('  Demo architect  : architect@example.com / Password123');
   console.log('  Officer login   : officer@cidco.example / Password123');
+  console.log('  Windows agent   : cidco@example.com / 123456  ·  company ABCD123');
   console.log('  Connect demos   :');
   for (const demo of DEMO_HANDSHAKES) {
     console.log(`    ${demo.clientId} / ${demo.clientSecret}`);

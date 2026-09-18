@@ -30,19 +30,28 @@ import {
   homeDirFor,
   ingestTransfer,
   isAcceptedFile,
+  isSharedSftpLogin,
   normaliseIp,
   normalisePath,
+  parseAgentPath,
   sha256,
   storageRoot,
   SFTP_PORT,
+  SHARED_SFTP_USER,
 } from '../src/lib/sftp';
 
 const { STATUS_CODE, OPEN_MODE } = utils.sftp;
 
 const HOST = process.env.SFTP_HOST || '0.0.0.0';
 
-/** An authenticated session: the credentials and the company behind them. */
-type Account = { handshake: ArchitectHandshake; company: Company | null };
+/**
+ * An authenticated session.
+ *
+ * Per-company credentials carry their company. The shared CIDCO login the
+ * Windows agent uses does not — it names the company in the upload path
+ * instead, and `shared` marks that.
+ */
+type Account = { handshake: ArchitectHandshake; company: Company | null; shared: boolean };
 
 /** Where this account is expected to write — the registered file path. */
 function expectedDir(account: Account) {
@@ -99,6 +108,35 @@ async function hostKey(): Promise<string> {
   }
 }
 
+/**
+ * The shared login has no company of its own, but the schema hangs logs and
+ * uploads off a handshake — so one carrier row stands in for it. The company
+ * is resolved per file, from the upload path.
+ */
+async function sharedLoginHandshake(): Promise<ArchitectHandshake | null> {
+  const clientId = `shared:${SHARED_SFTP_USER}`;
+  const found = await prisma.architectHandshake.findUnique({ where: { clientId } });
+  if (found) return found;
+
+  const owner = await prisma.user.findFirst({ where: { role: 'ARCHITECT' }, orderBy: { createdAt: 'asc' } });
+  if (!owner) return null;
+
+  return prisma.architectHandshake
+    .create({
+      data: {
+        architectId: owner.id,
+        channel: 'SFTP',
+        clientId,
+        secretHash: sha256(`carrier-${clientId}`),
+        secretPrefix: 'shared',
+        credentialExpiresAt: new Date(Date.now() + 100 * 365 * 24 * 3600 * 1000),
+        status: 'ESTABLISHED',
+        establishedAt: new Date(),
+      },
+    })
+    .catch(() => prisma.architectHandshake.findUnique({ where: { clientId } }));
+}
+
 type AuthOutcome =
   | { ok: true; account: Account }
   | { ok: false; reason: string; handshakeId: string | null; event: string };
@@ -112,6 +150,21 @@ type AuthOutcome =
  * the company record on each transfer.
  */
 async function authorise(username: string, password: string, ip: string | null, client: string): Promise<AuthOutcome> {
+  // The Windows agent signs in with one CIDCO username and password and names
+  // its company in the upload path. Every file is still validated in full.
+  if (isSharedSftpLogin(username, password)) {
+    const carrier = await sharedLoginHandshake();
+    if (!carrier) {
+      return {
+        ok: false,
+        reason: 'The shared CIDCO SFTP login is not configured on this server',
+        handshakeId: null,
+        event: 'SFTP_AUTH_FAILED',
+      };
+    }
+    return { ok: true, account: { handshake: carrier, company: null, shared: true } };
+  }
+
   const handshake = await prisma.architectHandshake.findUnique({
     where: { clientId: username },
     include: { company: true },
@@ -173,7 +226,7 @@ async function authorise(username: string, password: string, ip: string | null, 
     },
   });
 
-  return { ok: true, account: { handshake, company } };
+  return { ok: true, account: { handshake, company, shared: false } };
 }
 
 // --- SFTP session ----------------------------------------------------------
@@ -184,6 +237,10 @@ type WriteHandle = {
   fileName: string;
   /** The directory the client wrote to — validated against the company record. */
   dir: string;
+  /** Named in the path by the shared login; absent for per-company credentials. */
+  companyId?: string;
+  /** The remote path exactly as the client asked for it, for the stat after a put. */
+  remote: string;
   chunks: Buffer[];
   bytes: number;
 };
@@ -191,6 +248,23 @@ type DirHandle = { kind: 'dir'; entries: FileEntry[]; sent: boolean };
 type Handle = WriteHandle | DirHandle;
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+
+/**
+ * Files are ingested, not left lying at the path they were written to — but
+ * ordinary clients (WinSCP, paramiko, the sftp CLI) stat the file straight
+ * after a put to confirm the size. Remember what just arrived so that check
+ * sees the truth instead of "no such file".
+ */
+const justReceived = new Map<string, { size: number; at: number }>();
+
+function rememberReceived(remotePath: string, size: number) {
+  justReceived.set(normalisePath(remotePath), { size, at: Date.now() });
+  // Keep the map small: anything older than ten minutes is of no use.
+  const cutoff = Date.now() - 10 * 60_000;
+  for (const [key, value] of justReceived) {
+    if (value.at < cutoff) justReceived.delete(key);
+  }
+}
 
 function attrsFor(size: number, isDir: boolean) {
   const now = Math.floor(Date.now() / 1000);
@@ -209,7 +283,9 @@ function startSession(conn: Connection, account: Account, ip: string | null) {
   // The directory this account is expected to write to: the file path CIDCO
   // registered for the company. The path a client actually writes to is what
   // gets validated on every transfer.
-  const home = expectedDir(account);
+  // The shared login has no single registered path: it names a company per
+  // upload, so its working directory is the root.
+  const home = account.shared ? '/' : expectedDir(account);
 
   conn.on('session', (acceptSession) => {
     const session = acceptSession();
@@ -241,7 +317,11 @@ function startSession(conn: Connection, account: Account, ip: string | null) {
       // navigate to the registered path, wherever it is.
       const statLike = (reqid: number, givenPath: string) => {
         const clean = normalisePath(givenPath) || '/';
-        if (isAcceptedFile(clean)) return sftp.status(reqid, STATUS_CODE.NO_SUCH_FILE);
+        if (isAcceptedFile(clean)) {
+          const seen = justReceived.get(clean);
+          if (seen) return sftp.attrs(reqid, attrsFor(seen.size, false));
+          return sftp.status(reqid, STATUS_CODE.NO_SUCH_FILE);
+        }
         return sftp.attrs(reqid, attrsFor(0, true));
       };
       sftp.on('STAT', statLike);
@@ -289,11 +369,47 @@ function startSession(conn: Connection, account: Account, ip: string | null) {
           log(`refused ${base} from ${handshake.clientId}: not a .csv or .xlsx file`);
           return sftp.status(reqid, STATUS_CODE.PERMISSION_DENIED);
         }
+
+        if (account.shared) {
+          // The agent names its company first: /<companyId>/<source path>/<file>
+          const parsed = parseAgentPath(filename);
+          if (!parsed) {
+            log(`refused ${base}: the shared login must write to /<companyId>/<path>/<file>`);
+            return sftp.status(reqid, STATUS_CODE.PERMISSION_DENIED);
+          }
+          // An unregistered company is refused here and now, so the agent gets
+          // a real error rather than a silent rejection after the fact. A
+          // registered company with the wrong address or path still goes
+          // through, so CIDCO records the refusal and why.
+          void (async () => {
+            const known = await prisma.company
+              .findUnique({ where: { companyId: parsed.companyId } })
+              .catch(() => null);
+            if (!known || !known.active) {
+              log(`refused ${base}: company "${parsed.companyId}" is not registered with CIDCO`);
+              return sftp.status(reqid, STATUS_CODE.PERMISSION_DENIED);
+            }
+            sftp.handle(
+              reqid,
+              newHandle({
+                kind: 'file',
+                fileName: base,
+                dir: parsed.declaredPath,
+                companyId: parsed.companyId,
+                remote: filename,
+                chunks: [],
+                bytes: 0,
+              }),
+            );
+          })();
+          return;
+        }
+
         // Remember the directory it is being written to — CIDCO validates it
         // against the registered file path when the handle closes. A bare
         // filename means the client's working directory, which is home.
         const dir = filename.includes('/') ? normalisePath(path.posix.dirname(filename)) : home;
-        sftp.handle(reqid, newHandle({ kind: 'file', fileName: base, dir, chunks: [], bytes: 0 }));
+        sftp.handle(reqid, newHandle({ kind: 'file', fileName: base, dir, remote: filename, chunks: [], bytes: 0 }));
       });
 
       sftp.on('WRITE', (reqid, handleBuf, _offset, data) => {
@@ -318,6 +434,10 @@ function startSession(conn: Connection, account: Account, ip: string | null) {
         handles.delete(id);
         if (!handle || handle.kind !== 'file') return sftp.status(reqid, STATUS_CODE.OK);
 
+        // Record the size before answering: the client stats the path as soon
+        // as the close returns.
+        rememberReceived(handle.remote, handle.bytes);
+
         // Answer the client first, then do the slow work.
         sftp.status(reqid, STATUS_CODE.OK);
         void receiveFile(account, handle, ip);
@@ -331,7 +451,12 @@ function startSession(conn: Connection, account: Account, ip: string | null) {
  * if that passes — turns its rows into readings.
  */
 async function receiveFile(account: Account, handle: WriteHandle, ip: string | null) {
-  const { handshake, company } = account;
+  const { handshake } = account;
+  // Per-company credentials carry their company; the shared login names it in
+  // the upload path, so look it up per file.
+  const company = handle.companyId
+    ? await prisma.company.findUnique({ where: { companyId: handle.companyId } })
+    : account.company;
   const buffer = Buffer.concat(handle.chunks);
   const home = homeDirFor(handshake.clientId);
   const ext = path.posix.extname(handle.fileName).toLowerCase() || '.csv';
