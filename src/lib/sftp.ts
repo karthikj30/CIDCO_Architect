@@ -685,3 +685,40 @@ export function agentRemotePath(companyId: string, filePath: string, fileName: s
   const name = path.posix.basename(fileName);
   return `/${[company, source, name].filter(Boolean).join('/')}`;
 }
+
+/**
+ * The handshake row that carries transfers made with the shared CIDCO login.
+ *
+ * The Windows agent signs in as one CIDCO user for everybody and names its
+ * company in the upload path, so there is no per-architect handshake to hang a
+ * transfer off. This row is that hook: one carrier record, created on first
+ * use, which every shared-login transfer is filed against. The company still
+ * comes from what the agent presented, and is still validated in full.
+ *
+ * Both doors into the SFTP channel — the SFTP server and the portal's upload
+ * endpoint — resolve it through here, so a credential that opens one opens the
+ * other.
+ */
+export async function sharedLoginHandshake(): Promise<ArchitectHandshake | null> {
+  const clientId = `shared:${SHARED_SFTP_USER}`;
+  const found = await prisma.architectHandshake.findUnique({ where: { clientId } });
+  if (found) return found;
+
+  const owner = await prisma.user.findFirst({ where: { role: 'ARCHITECT' }, orderBy: { createdAt: 'asc' } });
+  if (!owner) return null;
+
+  return prisma.architectHandshake
+    .create({
+      data: {
+        architectId: owner.id,
+        channel: 'SFTP',
+        clientId,
+        secretHash: sha256(`carrier-${clientId}`),
+        secretPrefix: 'shared',
+        credentialExpiresAt: new Date(Date.now() + 100 * 365 * 24 * 3600 * 1000),
+        status: 'ESTABLISHED',
+        establishedAt: new Date(),
+      },
+    })
+    .catch(() => prisma.architectHandshake.findUnique({ where: { clientId } }));
+}

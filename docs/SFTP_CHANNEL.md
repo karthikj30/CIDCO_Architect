@@ -256,6 +256,27 @@ which watches their export folder and sends the newest CSV on a schedule.
 
 It is the same channel and the same validation; only the sign-in differs.
 
+### Two doors, one channel
+
+The intake is reachable two ways, and they are the same channel throughout —
+same credentials, same validation, same data table. Only the transport differs,
+and CIDCO records which was used (`DIRECT_SFTP` or `PORTAL`).
+
+| Door | Where | Who uses it |
+| --- | --- | --- |
+| SFTP | `SFTP_PORT`, default 2222 | The Windows agent by default, and any SFTP client |
+| Portal | `POST /api/architect/sftp/transfer` on the web app | The browser drag-and-drop, and the Windows agent when its address starts `http://` |
+
+The second exists because the portal's port is very often the one a site has
+already opened. The SFTP intake is a separate process on its own port, and a
+firewall that lets the portal through frequently does not let the intake
+through. Rather than leave the architect unable to send anything, the agent can
+hand the same file to the same intake over HTTP.
+
+Both doors accept the shared CIDCO login. Over SFTP the company travels in the
+upload path; over HTTP it travels as a `companyId` form field. Everything after
+that is identical.
+
 ### One shared login, and the company in the path
 
 Rather than a per-company SFTP user id, the agent signs in with a single login CIDCO publishes:

@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
 import type { NextRequest } from 'next/server';
+import type { ArchitectHandshake, Company } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { fail, handleError, ok } from '@/lib/api';
 import { clientIp } from '@/lib/handshake';
@@ -10,10 +11,12 @@ import {
   homeDirFor,
   ingestTransfer,
   isAcceptedFile,
+  isSharedSftpLogin,
   normaliseIp,
   normalisePath,
   sftpEndpoint,
   sha256,
+  sharedLoginHandshake,
 } from '@/lib/sftp';
 
 export const dynamic = 'force-dynamic';
@@ -42,6 +45,9 @@ export async function POST(req: NextRequest) {
     const password = String(form.get('password') ?? '');
     const designatedIp = String(form.get('designatedIp') ?? '').trim();
     const declaredPath = String(form.get('filePath') ?? '').trim();
+    // Only meaningful with the shared login, which does not identify a company
+    // on its own. A per-architect account carries its company already.
+    const declaredCompanyId = String(form.get('companyId') ?? '').trim();
     const file = form.get('file');
 
     if (!username || !password) return fail('Enter the user id and password CIDCO sent you', 422);
@@ -51,16 +57,40 @@ export async function POST(req: NextRequest) {
     if (file.size > MAX_BYTES) return fail('That file is larger than 25 MB', 422);
 
     // --- The credentials, checked exactly as the SFTP server checks them ----
-    const handshake = await prisma.architectHandshake.findUnique({
-      where: { clientId: username },
-      include: { company: true },
-    });
-    if (!handshake || handshake.channel !== 'SFTP' || !hashesEqual(sha256(password), handshake.secretHash)) {
-      return fail('That user id and password did not match. Check the credentials CIDCO emailed you.', 401);
-    }
-    if (handshake.revokedAt || handshake.status === 'REVOKED') return fail('These credentials have been revoked', 403);
-    if (handshake.credentialExpiresAt.getTime() < Date.now()) {
-      return fail('These credentials have expired — ask CIDCO to issue new ones', 403);
+    // The Windows agent signs in with the one shared CIDCO login and names its
+    // company alongside the file, exactly as it names it in the upload path
+    // when it goes over SFTP. Both doors into this channel therefore take the
+    // same credential, and validate what arrives identically.
+    let handshake: (ArchitectHandshake & { company: Company | null }) | null = null;
+
+    if (isSharedSftpLogin(username, password)) {
+      const carrier = await sharedLoginHandshake();
+      if (!carrier) {
+        return fail('The shared CIDCO login is not configured on this server', 503);
+      }
+      if (!declaredCompanyId) {
+        return fail('Send your company id alongside the file when using the shared CIDCO login', 422);
+      }
+
+      const named = await prisma.company.findUnique({ where: { companyId: declaredCompanyId } });
+      if (!named || !named.active) {
+        return fail(`CIDCO has no active registration for company "${declaredCompanyId}"`, 403);
+      }
+      handshake = { ...carrier, company: named };
+    } else {
+      handshake = await prisma.architectHandshake.findUnique({
+        where: { clientId: username },
+        include: { company: true },
+      });
+      if (!handshake || handshake.channel !== 'SFTP' || !hashesEqual(sha256(password), handshake.secretHash)) {
+        return fail('That user id and password did not match. Check the credentials CIDCO emailed you.', 401);
+      }
+      if (handshake.revokedAt || handshake.status === 'REVOKED') {
+        return fail('These credentials have been revoked', 403);
+      }
+      if (handshake.credentialExpiresAt.getTime() < Date.now()) {
+        return fail('These credentials have expired — ask CIDCO to issue new ones', 403);
+      }
     }
 
     // The address they were told to send to has to be the one they used.

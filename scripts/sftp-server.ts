@@ -34,10 +34,11 @@ import {
   normaliseIp,
   normalisePath,
   parseAgentPath,
-  sha256,
-  storageRoot,
   SFTP_PORT,
+  sha256,
   SHARED_SFTP_USER,
+  sharedLoginHandshake,
+  storageRoot,
 } from '../src/lib/sftp';
 
 const { STATUS_CODE, OPEN_MODE } = utils.sftp;
@@ -106,35 +107,6 @@ async function hostKey(): Promise<string> {
     await fs.writeFile(file, privateKey, { mode: 0o600 });
     return privateKey;
   }
-}
-
-/**
- * The shared login has no company of its own, but the schema hangs logs and
- * uploads off a handshake — so one carrier row stands in for it. The company
- * is resolved per file, from the upload path.
- */
-async function sharedLoginHandshake(): Promise<ArchitectHandshake | null> {
-  const clientId = `shared:${SHARED_SFTP_USER}`;
-  const found = await prisma.architectHandshake.findUnique({ where: { clientId } });
-  if (found) return found;
-
-  const owner = await prisma.user.findFirst({ where: { role: 'ARCHITECT' }, orderBy: { createdAt: 'asc' } });
-  if (!owner) return null;
-
-  return prisma.architectHandshake
-    .create({
-      data: {
-        architectId: owner.id,
-        channel: 'SFTP',
-        clientId,
-        secretHash: sha256(`carrier-${clientId}`),
-        secretPrefix: 'shared',
-        credentialExpiresAt: new Date(Date.now() + 100 * 365 * 24 * 3600 * 1000),
-        status: 'ESTABLISHED',
-        establishedAt: new Date(),
-      },
-    })
-    .catch(() => prisma.architectHandshake.findUnique({ where: { clientId } }));
 }
 
 type AuthOutcome =
