@@ -438,9 +438,15 @@ function startSession(conn: Connection, account: Account, ip: string | null) {
         // as the close returns.
         rememberReceived(handle.remote, handle.bytes);
 
-        // Answer the client first, then do the slow work.
-        sftp.status(reqid, STATUS_CODE.OK);
-        void receiveFile(account, handle, ip);
+        // Validate before answering, so the architect's agent learns the
+        // verdict. Their only window onto CIDCO is what this close returns —
+        // they cannot see the dashboard — so answering OK on a file we then
+        // refuse would leave a misconfigured agent reporting success forever.
+        void receiveFile(account, handle, ip)
+          .then((accepted) =>
+            sftp.status(reqid, accepted ? STATUS_CODE.OK : STATUS_CODE.PERMISSION_DENIED),
+          )
+          .catch(() => sftp.status(reqid, STATUS_CODE.FAILURE));
       });
     });
   });
@@ -449,8 +455,10 @@ function startSession(conn: Connection, account: Account, ip: string | null) {
 /**
  * Persists a completed transfer, runs CIDCO's validation over it, and — only
  * if that passes — turns its rows into readings.
+ *
+ * Returns whether CIDCO accepted it, which is what the client is told.
  */
-async function receiveFile(account: Account, handle: WriteHandle, ip: string | null) {
+async function receiveFile(account: Account, handle: WriteHandle, ip: string | null): Promise<boolean> {
   const { handshake } = account;
   // Per-company credentials carry their company; the shared login names it in
   // the upload path, so look it up per file.
@@ -490,7 +498,7 @@ async function receiveFile(account: Account, handle: WriteHandle, ip: string | n
           'Nothing was stored.',
         ip,
       });
-      return;
+      return false;
     }
 
     log(
@@ -510,6 +518,7 @@ async function receiveFile(account: Account, handle: WriteHandle, ip: string | n
         (upload.failedCount ? `, ${upload.failedCount} rejected` : ''),
       ip,
     });
+    return true;
   } catch (error) {
     log('failed to receive file:', error);
     await logComm({
@@ -520,6 +529,7 @@ async function receiveFile(account: Account, handle: WriteHandle, ip: string | n
       detail: `Could not store "${handle.fileName}": ${error instanceof Error ? error.message : String(error)}`,
       ip,
     });
+    return false;
   }
 }
 

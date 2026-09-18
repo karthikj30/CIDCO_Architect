@@ -186,9 +186,17 @@ async function main() {
   console.log('== a transfer that does not match is refused ==');
   const conn2 = await connect(cred.username, cred.password);
   if (!conn2) throw new Error('reconnect failed');
-  await put(conn2, '/somewhere/else/readings.csv', csv(2));
+  // The architect cannot see CIDCO's dashboard, so the refusal has to come back
+  // down the wire — the upload itself must fail, not quietly report success.
+  let refusedOnTheWire = false;
+  try {
+    await put(conn2, '/somewhere/else/readings.csv', csv(2));
+  } catch {
+    refusedOnTheWire = true;
+  }
   conn2.end();
   await new Promise((r) => setTimeout(r, 2500));
+  check(refusedOnTheWire, 'the sender is told the transfer was refused');
 
   const afterBad = await prisma.report.count({ where: { companyRecordId: companyRow.id } });
   const rejected = await prisma.sftpUpload.findFirst({

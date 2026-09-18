@@ -275,9 +275,13 @@ company id at the front of the upload path:
 
 The server reads the company id when the file is opened and looks it up in the master table. An
 unregistered or deactivated id is refused there and then with `PERMISSION_DENIED` — the bytes are
-never accepted. A **registered** company whose IP or file path does not match is allowed to finish
-the upload and then recorded as `REJECTED`, with the reason, so the officer can see a misconfigured
-agent rather than silence. Either way nothing is stored.
+never accepted.
+
+A **registered** company whose IP or file path does not match is allowed to finish the upload, so
+CIDCO can record exactly what it presented, and is then recorded as `REJECTED` with the reason. The
+close is answered with `PERMISSION_DENIED`, so the upload **fails on the sender's side too**: the
+architect has no view of this dashboard, so a refusal they never hear about would leave a
+misconfigured agent reporting success indefinitely. Either way nothing is stored.
 
 ### The data table
 

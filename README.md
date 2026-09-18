@@ -188,7 +188,8 @@ They enter the user id, password and designated IP and drag a CSV across. Those 
 Architects who would rather not drag files by hand install the **CIDCO AQI Agent**, a small Windows
 program that watches their export folder and sends the newest CSV on a schedule. It lives in its own
 repository — [`karthikj30/CIDCO_WinEXE`](https://github.com/karthikj30/CIDCO_WinEXE) — and talks to
-this server and nothing else.
+this server and nothing else. It is C# on .NET 8, published as one self-contained `.exe` that is both
+its own installer and the agent.
 
 It signs in with **one shared SFTP login** (`SFTP_SHARED_USER` / `SFTP_SHARED_PASSWORD`, by default
 `cidco@example.com` / `123456`) and names its company in the upload path:
@@ -223,7 +224,9 @@ storage/cidco-data/
 
 Officers browse that tree under **Data** in `/cidco/sftp`, with the company's master row shown above
 each one, and can download any file exactly as it arrived. A rejected transfer is still recorded
-under **Delivered transfers** with the reason, but nothing is filed and no reading is stored.
+under **Delivered transfers** with the reason, but nothing is filed and no reading is stored — and
+the upload is failed on the sender's side as well, so the architect, who cannot see this dashboard,
+learns that CIDCO turned it away.
 
 The columns CIDCO reads:
 
